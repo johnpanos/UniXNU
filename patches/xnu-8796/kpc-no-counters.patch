@@ -1,0 +1,173 @@
+diff --git a/osfmk/arm64/kpc.c b/osfmk/arm64/kpc.c
+new file mode 100644
+index 0000000..d8c72aa
+--- /dev/null
++++ b/osfmk/arm64/kpc.c
+@@ -0,0 +1,167 @@
++/*
++ * kpc backend of the UniXNU xnu-8796 series for non-Apple ARMv8 cores.
++ *
++ * files.arm64 builds osfmk/arm64/kpc.c whenever kpc is configured, and kperf
++ * (always configured) samples through kpc, but Apple's backend programs the
++ * Apple PMU and is not part of the published source. This backend has no
++ * counters: no class is supported, every count is zero and every attempt to
++ * configure or start counting fails.
++ */
++
++#include <mach/mach_types.h>
++#include <machine/machine_routines.h>
++#include <kern/kpc.h>
++#include <sys/errno.h>
++
++int kpc_pc_capture = 0;
++
++void
++kpc_arch_init(void)
++{
++	kpc_supported = false;
++}
++
++uint32_t
++kpc_get_classes(void)
++{
++	return 0;
++}
++
++int
++kpc_get_pmu_version(void)
++{
++	return KPC_PMU_ERROR;
++}
++
++uint32_t
++kpc_fixed_count(void)
++{
++	return 0;
++}
++
++uint32_t
++kpc_configurable_count(void)
++{
++	return 0;
++}
++
++uint32_t
++kpc_fixed_config_count(void)
++{
++	return 0;
++}
++
++uint32_t
++kpc_configurable_config_count(uint64_t pmc_mask __unused)
++{
++	return 0;
++}
++
++uint32_t
++kpc_rawpmu_config_count(void)
++{
++	return 0;
++}
++
++int
++kpc_get_fixed_config(kpc_config_t *configv __unused)
++{
++	return 0;
++}
++
++int
++kpc_get_configurable_config(kpc_config_t *configv __unused, uint64_t pmc_mask __unused)
++{
++	return 0;
++}
++
++int
++kpc_get_rawpmu_config(kpc_config_t *configv __unused)
++{
++	return 0;
++}
++
++uint64_t
++kpc_fixed_max(void)
++{
++	return 0;
++}
++
++uint64_t
++kpc_configurable_max(void)
++{
++	return 0;
++}
++
++int
++kpc_get_fixed_counters(uint64_t *counterv __unused)
++{
++	return 0;
++}
++
++int
++kpc_get_configurable_counters(uint64_t *counterv __unused, uint64_t pmc_mask __unused)
++{
++	return 0;
++}
++
++int
++kpc_get_all_cpus_counters(uint32_t classes __unused, int *curcpu, uint64_t *buf __unused)
++{
++	if (curcpu) {
++		*curcpu = cpu_number();
++	}
++	return 0;
++}
++
++boolean_t
++kpc_is_running_fixed(void)
++{
++	return FALSE;
++}
++
++boolean_t
++kpc_is_running_configurable(uint64_t pmc_mask __unused)
++{
++	return FALSE;
++}
++
++int
++kpc_set_running_arch(struct kpc_running_remote *mp_config __unused)
++{
++	return ENOTSUP;
++}
++
++int
++kpc_set_period_arch(struct kpc_config_remote *mp_config __unused)
++{
++	return ENOTSUP;
++}
++
++int
++kpc_set_config_arch(struct kpc_config_remote *mp_config __unused)
++{
++	return ENOTSUP;
++}
++
++int
++kpc_force_all_ctrs_arch(task_t task __unused, int val __unused)
++{
++	return ENOTSUP;
++}
++
++int
++kpc_set_sw_inc(uint32_t mask __unused)
++{
++	return ENOTSUP;
++}
++
++void
++kpc_idle(void)
++{
++}
++
++void
++kpc_idle_exit(void)
++{
++}

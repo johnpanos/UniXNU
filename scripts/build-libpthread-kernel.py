@@ -9,8 +9,15 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from xnu_symbols import kernel_names
+import os
+# The iOS release of the XNU source (feeds.toml ios_min, through the unixnu driver): the deployment target the
+# kernel objects carry, so the archives match it.
+IOS_MIN = os.environ.get('UNIXNU_XNU_IOS_MIN', '17.0')
+IOS_TARGET = f'arm64-apple-ios{IOS_MIN}'
+IOS_DEPLOYMENT = (2, int(IOS_MIN.split('.')[0]) << 16 | int((IOS_MIN.split('.') + ['0'])[1]) << 8)
 SOURCE = ROOT / 'refer/libpthread'
-REVISION = 'c0e60fb5ecfc54cf379c261d3f9572cc22ded891'
+# The pinned source of feeds.toml (libpthread-519.120.4 for Darwin 23; a board may pin another, e.g. 486 for Darwin 22).
+REVISION = os.environ.get('UNIXNU_LIBPTHREAD_COMMIT', 'c0e60fb5ecfc54cf379c261d3f9572cc22ded891')
 if subprocess.check_output(['git', '-C', SOURCE, 'rev-parse', 'HEAD'], text=True).strip() != REVISION:
     raise SystemExit('Unexpected libpthread source revision')
 if subprocess.check_output(['git', '-C', SOURCE, 'status', '--porcelain'], text=True):
@@ -18,7 +25,10 @@ if subprocess.check_output(['git', '-C', SOURCE, 'status', '--porcelain'], text=
 WORK = ROOT / '.cache/libpthread-work'
 if not WORK.exists():
     subprocess.run(['git', 'clone', '--shared', SOURCE, WORK], check=True)
-for patch in sorted((ROOT / 'patches/libpthread').glob('*.patch')):
+# patches/libpthread-<major> (e.g. libpthread-486 for UNIXNU_LIBPTHREAD_TAG libpthread-486.100.11) replaces patches/libpthread.
+MAJOR = os.environ.get('UNIXNU_LIBPTHREAD_TAG', '').removeprefix('libpthread-').split('.')[0]
+PATCHES = ROOT / f'patches/libpthread-{MAJOR}' if MAJOR and (ROOT / f'patches/libpthread-{MAJOR}').is_dir() else ROOT / 'patches/libpthread'
+for patch in sorted(PATCHES.glob('*.patch')):
     if subprocess.run(['git', '-C', WORK, 'apply', '--reverse', '--check', patch],
                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
         subprocess.run(['git', '-C', WORK, 'apply', patch], check=True)
@@ -47,7 +57,7 @@ def compile_one(source, destination, namespace=None):
             index += 1
     else:
         framework = ROOT / '.cache/fakeroot/System/Library/Frameworks/Kernel.framework/Versions/A'
-        command = ['xcrun', '--sdk', 'iphoneos', 'clang', '-target', 'arm64-apple-ios17.0',
+        command = ['xcrun', '--sdk', 'iphoneos', 'clang', '-target', IOS_TARGET,
                    '-isysroot', sdk, '-mkernel', '-ffreestanding', '-fno-builtin', '-fno-stack-check',
                    '-std=gnu11', '-fblocks', '-O2', '-mno-implicit-float',
                    '-DKERNEL=1', '-DKERNEL_PRIVATE=1', '-DXNU_KERNEL_PRIVATE=1',
@@ -72,7 +82,7 @@ def compile_one(source, destination, namespace=None):
         if cmd == 0x32:
             deployment = struct.unpack_from('<II', data, offset + 8)
         offset += length
-    if deployment != (2, 0x110000):
+    if deployment != IOS_DEPLOYMENT:
         raise SystemExit(f'Unexpected pthread deployment: {deployment}')
 
 

@@ -1,0 +1,56 @@
+diff --git a/bsd/sys/mount.h b/bsd/sys/mount.h
+index 097bcfb..9ef5a97 100644
+--- a/bsd/sys/mount.h
++++ b/bsd/sys/mount.h
+@@ -1280,6 +1280,14 @@ void    vfs_getnewfsid(struct mount *mp);
+  */
+ mount_t vfs_getvfs(fsid_t *fsid);
+ 
++/*!
++ *  @function vfs_getvfs_with_vfsops
++ *  @abstract Given a filesystem ID, look up a mount structure, verify the vfsops
++ *  @param fsid Filesystem ID to look up.
++ *  @return Mountpoint if found and the vfsops matches the expected value, else NULL.  Note unmounting mountpoints can be returned.
++ */
++mount_t vfs_getvfs_with_vfsops(fsid_t *fsid, const struct vfsops *ops);
++
+ /*!
+  *  @function vfs_mountedon
+  *  @abstract Check whether a given block device has a filesystem mounted on it.
+diff --git a/bsd/vfs/vfs_subr.c b/bsd/vfs/vfs_subr.c
+index 125d3ee..e25422b 100644
+--- a/bsd/vfs/vfs_subr.c
++++ b/bsd/vfs/vfs_subr.c
+@@ -1951,6 +1951,20 @@ vfs_getvfs_locked(fsid_t *fsid)
+ 	return mount_list_lookupby_fsid(fsid, 1, 0);
+ }
+ 
++/*
++ * The KPI of later xnu-8796 releases (the 20H392 kernel exports it and its kexts import it), as xnu-10063 has it.
++ */
++struct mount *
++vfs_getvfs_with_vfsops(fsid_t *fsid, const struct vfsops * const ops)
++{
++	mount_t mp = mount_list_lookupby_fsid(fsid, 0, 0);
++
++	if (mp != NULL && mp->mnt_op != ops) {
++		mp = NULL;
++	}
++	return mp;
++}
++
+ struct mount *
+ vfs_getvfs_by_mntonname(char *path)
+ {
+diff --git a/config/BSDKernel.exports b/config/BSDKernel.exports
+index 9aa98ba..69ba025 100644
+--- a/config/BSDKernel.exports
++++ b/config/BSDKernel.exports
+@@ -673,6 +673,7 @@ _vfs_fsremove
+ _vfs_get_notify_attributes
+ _vfs_getnewfsid
+ _vfs_getvfs
++_vfs_getvfs_with_vfsops
+ _vfs_init_io_attributes
+ _vfs_ioattr
+ _vfs_isforce

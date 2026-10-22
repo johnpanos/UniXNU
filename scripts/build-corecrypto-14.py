@@ -16,6 +16,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from xnu_symbols import kernel_names
+import os
+# The iOS release of the XNU source (feeds.toml ios_min, through the unixnu driver): the deployment target the
+# kernel objects carry, so the archives match it.
+IOS_MIN = os.environ.get('UNIXNU_XNU_IOS_MIN', '17.0')
+IOS_TARGET = f'arm64-apple-ios{IOS_MIN}'
+IOS_DEPLOYMENT = (2, int(IOS_MIN.split('.')[0]) << 16 | int((IOS_MIN.split('.') + ['0'])[1]) << 8)
 SOURCE = ROOT / 'refer/corecrypto-2023'
 REVISION = '11fba65b12d8830630e248dfa8344caf8b065f26'
 OUT = ROOT / 'build/corecrypto-2023'
@@ -69,7 +75,7 @@ for header in SOURCE.glob('*/corecrypto/*.h'):
         link.symlink_to(header)
 sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
 framework = ROOT / '.cache/fakeroot/System/Library/Frameworks/Kernel.framework/Versions/A'
-command = ['xcrun', '--sdk', 'iphoneos', 'clang', '-target', 'arm64-apple-ios17.0', '-isysroot', sdk,
+command = ['xcrun', '--sdk', 'iphoneos', 'clang', '-target', IOS_TARGET, '-isysroot', sdk,
            '-mkernel', '-ffreestanding', '-fno-builtin', '-fno-stack-check', '-std=gnu99', '-fblocks', '-O2',
            '-fno-vectorize', '-fno-slp-vectorize', '-mno-implicit-float',
            '-DKERNEL=1', '-DKERNEL_PRIVATE=1', '-DBUILDKERNEL=1', '-DCC_USE_ASM=0', '-DNDEBUG=1',
@@ -109,7 +115,7 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
 failed = [result for result in results if result['exit_code']]
 report = {'source_url': 'https://github.com/ONLYA/corecrypto-2023', 'source_revision': REVISION,
           'provenance': 'Third-party source snapshot; not authenticated against an Apple archive',
-          'module_version': '14.0', 'target': 'arm64-apple-ios17.0', 'assembly_enabled': False,
+          'module_version': '14.0', 'target': IOS_TARGET, 'assembly_enabled': False,
           'compiled_sources': len(results), 'failures': len(failed), 'objects': results,
           'kernel_provider_registered': False, 'crypto_selftests_passed': False}
 (OUT / f'build-report{variant}.json').write_text(json.dumps(report, indent=2) + '\n')
@@ -130,7 +136,7 @@ for result in results:
         if cmd == 0x32:
             deployment = struct.unpack_from('<II', data, offset + 8)
         offset += length
-    if deployment != (2, 0x110000):
+    if deployment != IOS_DEPLOYMENT:
         raise SystemExit(f'Wrong deployment: {result["object"]}: {deployment}')
 archive = OUT / f'libcorecrypto_kernel_noasm{variant}.a'
 archive.unlink(missing_ok=True)

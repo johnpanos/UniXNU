@@ -1,0 +1,29 @@
+diff --git a/osfmk/kern/kalloc.h b/osfmk/kern/kalloc.h
+index 535bc7b..fc3f678 100644
+--- a/osfmk/kern/kalloc.h
++++ b/osfmk/kern/kalloc.h
+@@ -821,12 +821,24 @@ __options_decl(kt_granule_t, uint32_t, {
+  * @param ptr           the pointer whose type needs to be checked.
+  * @param type          the type which the pointer will be checked against.
+  */
++#if defined(__cplusplus) && __has_builtin(__remove_pointer) && \
++        __has_builtin(__remove_reference_t)
++/*
++ * Current clang no longer lets C++ dereference a void pointer even inside
++ * __typeof__ (D150875); take the pointee type with the builtins, as later XNU
++ * does (os_get_pointee_type of libkern/os/alloc_util.h).
++ */
++#define KALLOC_TYPE_IS_COMPATIBLE_PTR(ptr, type)                                                        \
++	(__builtin_xnu_types_compatible(__remove_pointer(__remove_reference_t(__typeof__(ptr))), type) ||   \
++	    __builtin_xnu_types_compatible(__remove_pointer(__remove_reference_t(__typeof__(ptr))), void))
++#else
+ #define KALLOC_TYPE_IS_COMPATIBLE_PTR(ptr, type)                   \
+ 	_Pragma("clang diagnostic push")                               \
+ 	_Pragma("clang diagnostic ignored \"-Wvoid-ptr-dereference\"") \
+ 	(__builtin_xnu_types_compatible(__typeof__(*(ptr)), type) ||   \
+ 	    __builtin_xnu_types_compatible(__typeof__(*(ptr)), void))  \
+ 	_Pragma("clang diagnostic pop")
++#endif
+ 
+ #define KALLOC_TYPE_ASSERT_COMPATIBLE_POINTER(ptr, type) \
+ 	_Static_assert(KALLOC_TYPE_IS_COMPATIBLE_PTR(ptr, type), \

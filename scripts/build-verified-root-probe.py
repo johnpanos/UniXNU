@@ -7,6 +7,12 @@ from pathlib import Path
 import struct
 import subprocess
 import uuid
+import os
+# The iOS release of the XNU source (feeds.toml ios_min, through the unixnu driver): the deployment target the
+# kernel objects carry, so the archives match it.
+IOS_MIN = os.environ.get('UNIXNU_XNU_IOS_MIN', '17.0')
+IOS_TARGET = f'arm64-apple-ios{IOS_MIN}'
+IOS_DEPLOYMENT = (2, int(IOS_MIN.split('.')[0]) << 16 | int((IOS_MIN.split('.') + ['0'])[1]) << 8)
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -146,7 +152,7 @@ for source in (ROOT / 'kits/VerifiedRoot/src/verified_root.c', ROOT / 'kits/Veri
         raise SystemExit(result.stderr[-3500:])
     objects.append(destination)
 sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
-subprocess.run(['xcrun', 'clang', '-target', 'arm64-apple-ios17.0', '-isysroot', sdk, '-c',
+subprocess.run(['xcrun', 'clang', '-target', IOS_TARGET, '-isysroot', sdk, '-c',
                 assembly, '-o', out / 'inputs.o'], check=True)
 objects.append(out / 'inputs.o')
 for obj in objects:
@@ -159,7 +165,7 @@ for obj in objects:
         if command == 0x32:
             deployment = struct.unpack_from('<II', data, cursor + 8)
         cursor += length
-    if deployment != (2, 0x110000):
+    if deployment != IOS_DEPLOYMENT:
         raise SystemExit('Every probe object must target iOS 17')
 archive = out / 'libVerifiedRootProbe.a'
 archive.unlink(missing_ok=True)

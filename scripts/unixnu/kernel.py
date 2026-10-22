@@ -24,7 +24,8 @@ def xnu_env(ctx):
 def version_env(modules):
     """Source versions of the Apple references, from feeds.toml, for the kernel scripts."""
     env = {}
-    for name, prefix in (('xnu', 'XNU'), ('libplatform', 'LIBPLATFORM'), ('libdispatch', 'LIBDISPATCH'), ('AvailabilityVersions', 'AVAILABILITYVERSIONS')):
+    for name, prefix in (('xnu', 'XNU'), ('libplatform', 'LIBPLATFORM'), ('libdispatch', 'LIBDISPATCH'), ('AvailabilityVersions', 'AVAILABILITYVERSIONS'),
+                         ('libpthread', 'LIBPTHREAD')):
         module = modules.get(('refer', name))
         entry = module.source if module and module.source else {}
         if entry.get('ref'):
@@ -33,7 +34,8 @@ def version_env(modules):
             env[f'UNIXNU_{prefix}_COMMIT'] = entry['commit']
     xnu = (modules.get(('refer', 'xnu')) or None) and modules[('refer', 'xnu')].source or {}
     for key, variable in (('darwin', 'UNIXNU_XNU_DARWIN'), ('version', 'UNIXNU_XNU_VERSION'),
-                          ('driverkit_tag', 'UNIXNU_DRIVERKIT_TAG'), ('trustcache_tag', 'UNIXNU_TRUSTCACHE_TAG')):
+                          ('driverkit_tag', 'UNIXNU_DRIVERKIT_TAG'), ('trustcache_tag', 'UNIXNU_TRUSTCACHE_TAG'),
+                          ('ios_min', 'UNIXNU_XNU_IOS_MIN'), ('patch_series', 'UNIXNU_XNU_PATCH_SERIES')):
         if xnu.get(key):
             env[variable] = xnu[key]
     return env
@@ -119,7 +121,21 @@ def build_archives(ctx, env):
     """
     if not ctx.need_config().get('XNU_BUILD_ARCHIVES'):
         return
-    entries = ctx.board.get('kernel', {}).get('archives', [])
+    config = ctx.need_config()
+    entries = []
+    # An entry is "script args", or { run = "script args", when = "XNU_NAME" or [...] }: run only when the
+    # defconfig turns all of those on, so one board list serves a reduced configuration (a first prelink candidate).
+    for entry in ctx.board.get('kernel', {}).get('archives', []):
+        if isinstance(entry, dict):
+            when = entry.get('when', [])
+            when = [when] if isinstance(when, str) else when
+            if not entry.get('run') or any(not name.startswith('XNU_') for name in when):
+                raise Error(f'[kernel] archives: a table needs run and XNU_* names in when: {entry}')
+            if not all(config.get(name) for name in when):
+                log(f'kernel: archive skipped ({", ".join(n for n in when if not config.get(n))} off): {entry["run"]}')
+                continue
+            entry = entry['run']
+        entries.append(entry)
     env = dict(env, PATH=toolchain_path(env.get('PATH')))
     for index, entry in enumerate(entries, 1):
         parts = shlex.split(entry)
@@ -130,6 +146,9 @@ def build_archives(ctx, env):
         run(['python3', script, *parts[1:]], cwd=ctx.tree, env=env, log_file=ctx.logs / f'archive-{index:02d}-{Path(parts[0]).stem}.log')
     # Archives that no builder produces (they need inputs outside the repositories) must be supplied.
     for key, value in sorted(xnu_env(ctx).items()):
+        # The archive of a component the defconfig turns off is not needed (XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE and the like).
+        if key.endswith('_ARCHIVE') and config.get(key.removesuffix('_ARCHIVE')) is False:
+            continue
         if key.endswith('_ARCHIVE') and value.endswith('.a') and not Path(value).is_file():
             raise Error(f'{key}: {value} not found; no builder makes it, supply the archive')
 

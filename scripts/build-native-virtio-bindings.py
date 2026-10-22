@@ -12,6 +12,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'kits/NativePrelink'))
 import native_prelink as np
+import os
+# The iOS release of the XNU source (feeds.toml ios_min, through the unixnu driver): the deployment target the
+# kernel objects carry, so the archives match it.
+IOS_MIN = os.environ.get('UNIXNU_XNU_IOS_MIN', '17.0')
+IOS_TARGET = f'arm64-apple-ios{IOS_MIN}'
+IOS_DEPLOYMENT = (2, int(IOS_MIN.split('.')[0]) << 16 | int((IOS_MIN.split('.') + ['0'])[1]) << 8)
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--component', choices=['NativeVirtioBlock', 'NativeRamBlock'], default='NativeVirtioBlock')
 parser.add_argument('--directory', type=Path, default=ROOT / 'build/native-virtio-block')
@@ -77,7 +83,7 @@ if any(re.search(r'IOBlockStorageDeviceD[01]Ev$', n) for n in undefined):
 bindings = {name: possible[name] for name in undefined}
 assembly = out / 'original-bindings.S'
 assembly.write_text(''.join(f'.globl {name}\n.set {name}, {value:#x}\n' for name, value in sorted(bindings.items())))
-subprocess.run(['xcrun', 'clang', '-target', 'arm64-apple-ios17.0', '-Werror', '-Wno-incompatible-sysroot',
+subprocess.run(['xcrun', 'clang', '-target', IOS_TARGET, '-Werror', '-Wno-incompatible-sysroot',
                 '-c', assembly, '-o', out / 'original-bindings.o'], check=True)
 archive = out / ('lib' + component + '.a')
 archive.unlink(missing_ok=True)

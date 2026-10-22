@@ -11,6 +11,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'kits/NativePrelink'))
 import native_prelink as np
+import os
+# The iOS release of the XNU source (feeds.toml ios_min, through the unixnu driver): the deployment target the
+# kernel objects carry, so the archives match it.
+IOS_MIN = os.environ.get('UNIXNU_XNU_IOS_MIN', '17.0')
+IOS_TARGET = f'arm64-apple-ios{IOS_MIN}'
+IOS_DEPLOYMENT = (2, int(IOS_MIN.split('.')[0]) << 16 | int((IOS_MIN.split('.') + ['0'])[1]) << 8)
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--objects-dir', type=Path, default=ROOT / 'build/native-aes')
@@ -22,7 +28,7 @@ if not audit_path.is_file() and recorded.is_file():
     # Without the qualification evidence of the original kernelcache (kernel candidate, KDK annotations, live metadata),
     # bind with the recorded result of that audit. The addresses belong to the kernelcache pinned in board.toml.
     out = args.objects_dir
-    subprocess.run(['xcrun', 'clang', '-target', 'arm64-apple-ios17.0', '-Werror', '-Wno-incompatible-sysroot', '-c', recorded,
+    subprocess.run(['xcrun', 'clang', '-target', IOS_TARGET, '-Werror', '-Wno-incompatible-sysroot', '-c', recorded,
                     '-o', out / 'original-bindings.o'], check=True)
     archive = out / 'libNativeAES.a'
     archive.unlink(missing_ok=True)
@@ -124,7 +130,7 @@ out = args.objects_dir
 out.mkdir(parents=True, exist_ok=True)
 source = out / 'original-bindings.S'
 source.write_text(''.join(f'.globl {name}\n.set {name}, {address:#x}\n' for name, address in sorted(bindings.items())))
-subprocess.run(['xcrun', 'clang', '-target', 'arm64-apple-ios17.0', '-Werror', '-Wno-incompatible-sysroot', '-c', source,
+subprocess.run(['xcrun', 'clang', '-target', IOS_TARGET, '-Werror', '-Wno-incompatible-sysroot', '-c', source,
                 '-o', out / 'original-bindings.o'], check=True)
 archive = out / 'libNativeAES.a'
 archive.unlink(missing_ok=True)

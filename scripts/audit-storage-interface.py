@@ -23,6 +23,12 @@ parser.add_argument('--static', action='store_true', help='no live observation; 
 args = parser.parse_args()
 sys.path.insert(0, str(ROOT / 'kits/NativePrelink'))
 import native_prelink as np
+import os
+# The iOS release of the XNU source (feeds.toml ios_min, through the unixnu driver): the deployment target the
+# kernel objects carry, so the archives match it.
+IOS_MIN = os.environ.get('UNIXNU_XNU_IOS_MIN', '17.0')
+IOS_TARGET = f'arm64-apple-ios{IOS_MIN}'
+IOS_DEPLOYMENT = (2, int(IOS_MIN.split('.')[0]) << 16 | int((IOS_MIN.split('.') + ['0'])[1]) << 8)
 source = ROOT / 'refer/IOStorageFamily'
 revision = subprocess.check_output(['git', '-C', source, 'rev-parse', 'HEAD'], text=True).strip()
 if revision != 'e45fbe30a7879e0b16e26dddb78538f1b00e0bff':
@@ -78,7 +84,7 @@ dwarf = subprocess.check_output(['xcrun', 'dwarfdump', '--name=IOBlockStorageDev
 class_size = re.search(r'DW_AT_name\s+\("IOBlockStorageDevice"\)[\s\S]{0,200}?DW_AT_byte_size\s+\((0x[0-9a-f]+)\)', dwarf)
 require(class_size and int(class_size[1], 16) == 0x90, 'Actual compiled public class size changed')
 version_command = next(at for command, at, size in om['commands'] if command == 0x32)
-require(struct.unpack_from('<II', obj, version_command + 8) == (2, 0x110000), 'Expected iOS 17 reference deployment')
+require(struct.unpack_from('<II', obj, version_command + 8) == IOS_DEPLOYMENT, 'Expected iOS 17 reference deployment')
 sycmd = next(at for command, at, size in om['commands'] if command == 2)
 symoff, count, stroff, _ = struct.unpack_from('<4I', obj, sycmd + 8)
 symbols = []

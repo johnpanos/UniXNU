@@ -11,6 +11,12 @@ Manifest (little endian): "SHNGROOT", u32 version=1, u32 count, u64 image_bytes,
 {char name[32], u64 offset, u64 size, u32 block_size=512, u32 flags(1=read-only), u8 sha256[32], 40 reserved},
 and at byte 4064 the SHA-256 of bytes 0..4063.
 
+A second root image in the same partition sets [userdata] base_mib: it starts that far into userdata, after the first
+one. Its manifest is version 2, which adds u64 base_bytes at byte 4056 (hashed); offsets stay relative to the manifest,
+and NativeUfs reads it with native-ufs-root-base=<base_mib>. Besides the raw image the step then writes an Android
+sparse image whose first base_mib MiB are DONT_CARE, so "fastboot flash userdata" writes only this image's region and
+leaves the first image and the end of the partition (Data store, log) as they are.
+
 The images come from the IPSW (a local file or a remote URL, see ipsw.py) and are checked against the pins of
 board.toml. On macOS the disk images are attached read-only without mounting (hdiutil). Elsewhere a UDIF image
 is expanded from its block table and a raw image is read as it is, which gives the same bytes. Nothing is flashed:
@@ -132,6 +138,35 @@ def attach(dmg):
     raise Error('could not find the attached disk device')
 
 
+SPARSE_MAGIC, RAW_CHUNK, DONT_CARE_CHUNK = 0xed26ff3a, 0xcac1, 0xcac3
+SPARSE_RAW_BLOCKS = 16384           # 64 MiB raw chunks; fastboot splits the image for the device's download size anyway
+# The end of userdata a root image keeps clear of: NativeUfs' default reserve (sheng-log-reserve, 1 GiB) and its 4 MiB guard.
+END_RESERVE = 1024 * MIB + 4 * MIB
+
+
+def write_sparse(raw, sparse, base, block=4096):
+    """An Android sparse image of `raw` placed `base` bytes into the partition: DONT_CARE up to the base, then raw chunks."""
+    size = raw.stat().st_size
+    if base % block or size % block:
+        raise Error('sparse image: the base and the image must be whole 4096-byte blocks')
+    blocks = size // block
+    chunks = ([(DONT_CARE_CHUNK, base // block)] if base else []) + \
+        [(RAW_CHUNK, min(SPARSE_RAW_BLOCKS, blocks - at)) for at in range(0, blocks, SPARSE_RAW_BLOCKS)]
+    with raw.open('rb') as source, sparse.open('wb') as target:
+        target.write(struct.pack('<IHHHHIIII', SPARSE_MAGIC, 1, 0, 28, 12, block, base // block + blocks, len(chunks), 0))
+        for kind, count in chunks:
+            payload = count * block if kind == RAW_CHUNK else 0
+            target.write(struct.pack('<HHII', kind, 0, count, 12 + payload))
+            done = 0
+            while done < payload:
+                data = source.read(min(CHUNK, payload - done))
+                if not data:
+                    raise Error(f'sparse image: {raw} ended early')
+                target.write(data)
+                done += len(data)
+    return len(chunks)
+
+
 def build(ctx, dry_run=False):
     log('userdata payload')
     spec = ctx.board.get('userdata')
@@ -139,6 +174,9 @@ def build(ctx, dry_run=False):
         raise Error('board.toml has no [userdata]')
     source = Ipsw(ctx)
     capacity = (spec['last_lba'] - spec['first_lba'] + 1) * spec.get('lba_bytes', 4096)
+    base = int(spec.get('base_mib', 0)) * MIB
+    if base >= capacity:
+        raise Error(f'[userdata] base_mib {base // MIB} is past the end of the partition ({capacity // MIB} MiB)')
     if dry_run:
         for window in spec['windows']:
             name, size, _ = source.info(window['component'])
@@ -152,9 +190,10 @@ def build(ctx, dry_run=False):
         layout.append((name, cursor, size))
         cursor += (size + MIB - 1) // MIB * MIB
     total = cursor
-    log(f'userdata: image {total} bytes ({total / 2**30:.2f} GiB) in a partition of {capacity} bytes')
-    if total > capacity:
-        raise Error('the image is larger than the userdata partition')
+    log(f'userdata: image {total} bytes ({total / 2**30:.2f} GiB) at {base // MIB} MiB in a partition of {capacity} bytes')
+    if base + total > capacity - END_RESERVE:
+        raise Error(f'the image ends at {(base + total) / 2**30:.2f} GiB, inside the last {END_RESERVE // MIB} MiB of the userdata '
+                    'partition (the Data store and log reserve of NativeUfs) or past it')
     for name, dmg in sources:
         log(f'userdata: {name} from {dmg.name}')
     out, image, report = paths(ctx)
@@ -189,15 +228,24 @@ def build(ctx, dry_run=False):
             log(f'userdata: {name} {size} bytes at {offset:#x} sha256 {digest.hexdigest()}')
         header = bytearray(4096)
         header[0:8] = b'SHNGROOT'
-        struct.pack_into('<IIQ', header, 8, 1, len(entries), total)
+        struct.pack_into('<IIQ', header, 8, 2 if base else 1, len(entries), total)
         for index, (name, offset, size, digest) in enumerate(entries):
             struct.pack_into('<32sQQII32s40s', header, 24 + 128 * index, name.encode(), offset, size, 512, 1, digest, bytes(40))
+        if base:
+            struct.pack_into('<Q', header, 4056, base)   # version 2: the base this manifest is valid at
         header[4064:4096] = hashlib.sha256(bytes(header[:4064])).digest()
         target.seek(0)
         target.write(header)
+    flashed = image
+    if base:
+        flashed = image.with_suffix('.simg')
+        count = write_sparse(image, flashed, base)
+        log(f'userdata: {flashed}: sparse, {base // MIB} MiB DONT_CARE then the image ({count} chunks)')
     data = {'image_bytes': total, 'image_sha256': sha256_file(image), 'manifest_sha256': hashlib.sha256(bytes(header)).hexdigest(),
+            'manifest_version': 2 if base else 1, 'base_bytes': base, 'kernel_arg': f'native-ufs-root-base={base // MIB}' if base else None,
             'windows': [{'name': n, 'offset': o, 'size': s, 'sha256': d.hex()} for n, o, s, d in entries],
-            'userdata_bytes': capacity, 'flash_command': f'fastboot flash userdata {image}',
+            'userdata_bytes': capacity, 'flash_command': f'fastboot flash userdata {flashed}',
+            'sparse_sha256': sha256_file(flashed) if base else None,
             'source': 'remote' if source.remote else 'local', 'hardware_tested': False}
     report.write_text(json.dumps(data, indent=2) + '\n')
     log(f'userdata: {image}')

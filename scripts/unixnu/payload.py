@@ -7,6 +7,12 @@ trust cache and the Data ramdisk seed. The loader (DarwinBoot) is part of the fi
 Inputs that are not in a repository are options: the prelinked kernel (default: the output of
 "build kernel"), --trust-cache, --data-ramdisk and the platform seed --unique-chip-id.
 The volume is written with mtools, without mounting, so it is the same on every run.
+
+Every build also leaves its menu entry in out/<board>/payload/entry/: the Payloads files and entry.json (title,
+arguments, initrd and their sha256). A board that lists [[payload.include]] board = "NAME", id = "ID" copies the
+entry of board NAME, built before with its own "build payload", into Payloads/ID/ and adds it to the menu after its
+own entry. DarwinBoot takes the sidecars (.adt, .trustcache, .gpuaddon) from the entry's kernel path, so every entry
+keeps its own device tree, trust caches and Data seed.
 """
 import json
 import os
@@ -23,6 +29,57 @@ EPOCH = 315532800   # 1980-01-01, the first FAT timestamp; keeps the volume repr
 def paths(ctx):
     out = ctx.work / 'payload'
     return out, out / 'payload.img', out / 'payload.json'
+
+
+ENTRY_FILES = ('kernel.macho', 'kernel.macho.adt', 'kernel.macho.trustcache', 'kernel.macho.gpuaddon', 'scratch-data.img')
+
+
+def save_entry(ctx, payloads, title, line, initrd):
+    """out/<board>/payload/entry: this build's Payloads files and their menu entry, for a board that includes it."""
+    entry = paths(ctx)[0] / 'entry'
+    shutil.rmtree(entry, ignore_errors=True)
+    entry.mkdir(parents=True)
+    files = {}
+    for name in ENTRY_FILES:
+        if (payloads / name).is_file():
+            shutil.copyfile(payloads / name, entry / name)
+            files[name] = sha256_file(entry / name)
+    record = {'board': ctx.name, 'title': title, 'args': line, 'initrd': initrd, 'files': files}
+    (entry / 'entry.json').write_text(json.dumps(record, indent=2) + '\n')
+    return record
+
+
+def include_entries(ctx, spec, payloads):
+    """Copy the entries of the boards named by [[payload.include]] into Payloads/<id>/; returns their unixnu.toml tables."""
+    tables, records = '', []
+    for item in spec.get('include', []):
+        board, ident = item.get('board'), item.get('id')
+        if not board or not ident or not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,15}', ident) or ident == 'xnu':
+            raise Error(f'[[payload.include]] needs board and a short lower-case id other than "xnu": {item}')
+        source = ctx.out_root / board / 'payload/entry'
+        if not (source / 'entry.json').is_file():
+            raise Error(f'[[payload.include]] {board}: {source} has no entry; run "unixnu build payload -D <its device directory>" first')
+        record = json.loads((source / 'entry.json').read_text())
+        if record.get('board') != board:
+            raise Error(f'{source}/entry.json is the entry of {record.get("board")}, not {board}')
+        target = payloads / ident
+        target.mkdir()
+        for name, digest in record['files'].items():
+            if sha256_file(source / name) != digest:
+                raise Error(f'{source / name} changed after its payload build; build the payload of {board} again')
+            shutil.copyfile(source / name, target / name)
+        if 'kernel.macho' not in record['files'] or 'kernel.macho.adt' not in record['files']:
+            raise Error(f'{source}: the entry has no kernel or device tree')
+        check_args(record['args'].split())
+        initrd = f'initrd = "Payloads/{ident}/scratch-data.img"\n' if record['initrd'] else ''
+        title = item.get('title', record['title'])
+        if '"' in title or '\\' in title:
+            raise Error(f'[[payload.include]] {board}: unsupported title {title!r}')
+        tables += (f'[[entry]]\nid = "{ident}"\ntitle = "{title}"\ntype = "xnu"\npath = "Payloads/{ident}/kernel.macho"\n{initrd}'
+                   f'args = "{record["args"]}"\n')
+        records.append({'id': ident, 'board': board, 'title': title, 'args': record['args'], 'files': record['files']})
+        log(f'payload: entry "{title}" of {board} in Payloads/{ident}')
+    return tables, records
 
 
 def check_args(arguments):
@@ -149,6 +206,10 @@ def build(ctx, kernel=None):
         command.append('--ipad-identity')
     if data and adt.get('persistent_data'):
         command.append('--persistent-data')
+    # Board-specific flags of the ADT tool; {ipsw} is the IPSW cache of the board's build (out/ipsw/<build>).
+    ipsw_cache = ctx.out_root / 'ipsw' / ctx.board.get('ipsw', {}).get('build', '')
+    for value in adt.get('args', []):
+        command.append(str(value).replace('{ipsw}', str(ipsw_cache)).replace('{tree}', str(ctx.tree)).replace('{device}', str(ctx.device)))
     # Fixups of signed text (patches/xnu/native-text-fixup.patch) travel in /chosen/text-fixups, outside the 1000-byte command line.
     for fixup in spec.get('text_fixups', []):
         if not re.fullmatch(r'[A-Za-z0-9_.\-]{1,63},[0-9a-fA-F]{1,16},(?:[0-9a-fA-F]{2}){1,16},(?:[0-9a-fA-F]{2}){1,16}', fixup) or len(fixup) >= 160:
@@ -157,10 +218,13 @@ def build(ctx, kernel=None):
     run(command, cwd=ctx.tree, env=dict(os.environ, UNIXNU_UEFI=str(ctx.uefi or '')), log_file=ctx.logs / 'payload-adt.log')
     initrd = 'initrd = "Payloads/scratch-data.img"\n' if data else ''
     loader = '' if spec.get('loader', 'firmware') == 'firmware' else '[[driver]]\npath = "Payloads/DarwinBoot.efi"\n'
+    title = spec.get('title', 'UniXNU')
+    own = save_entry(ctx, payloads, title, line, bool(data))
+    included, included_records = include_entries(ctx, spec, payloads)
     (stage / 'EFI/UniXNU/unixnu.toml').write_text(
         f'version = 1\n[boot]\ntimeout = {spec.get("timeout", 3)}\ndefault = "xnu"\n[kits]\nautoload = false\n{loader}'
-        f'[[entry]]\nid = "xnu"\ntitle = "{spec.get("title", "UniXNU")}"\ntype = "xnu"\npath = "Payloads/kernel.macho"\n{initrd}'
-        f'args = "{line}"\n')
+        f'[[entry]]\nid = "xnu"\ntitle = "{title}"\ntype = "xnu"\npath = "Payloads/kernel.macho"\n{initrd}'
+        f'args = "{line}"\n' + included)
     for path in [stage, *stage.rglob('*')]:
         os.utime(path, (EPOCH, EPOCH))
     size = int(spec.get('size_mib', 192))
@@ -172,7 +236,9 @@ def build(ctx, kernel=None):
                    'adt_sha256': sha256_file(payloads / 'kernel.macho.adt'), 'kernel_args': line,
                    'trust_cache_sha256': sha256_file(trust) if trust else None, 'gpu_addon_sha256': sha256_file(addon) if addon else None,
                    'data_ramdisk_sha256': sha256_file(data) if data else None, 'skip_setup': bool(getattr(args, 'skip_setup', False)), 'panic_screen': bool(spec.get('panic_screen')),
-                   'payload_sha256': sha256_file(image), 'payload_bytes': image.stat().st_size, 'hardware_tested': False}
+                   'payload_sha256': sha256_file(image), 'payload_bytes': image.stat().st_size,
+                   'entries': [{'id': 'xnu', 'board': ctx.name, 'title': title, 'args': line, 'files': own['files']}] + included_records,
+                   'hardware_tested': False}
     report.write_text(json.dumps(data_report, indent=2) + '\n')
     shutil.rmtree(stage)
     log(f'payload: {image} ({image.stat().st_size >> 20} MiB)')

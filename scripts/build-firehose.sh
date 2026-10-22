@@ -24,7 +24,7 @@ PY
 if command -v xcodebuild >/dev/null; then
   xcodebuild install -project .cache/libdispatch-work/libdispatch.xcodeproj \
     -target libfirehose_kernel -configuration Release -sdk iphoneos -jobs "${JOBS:-4}" \
-    ARCHS=arm64 VALID_ARCHS=arm64 ONLY_ACTIVE_ARCH=NO IPHONEOS_DEPLOYMENT_TARGET=17.0 \
+    ARCHS=arm64 VALID_ARCHS=arm64 ONLY_ACTIVE_ARCH=NO IPHONEOS_DEPLOYMENT_TARGET="${UNIXNU_XNU_IOS_MIN:-17.0}" \
     CODE_SIGNING_ALLOWED=NO GCC_TREAT_WARNINGS_AS_ERRORS=NO \
     OBJROOT="$ROOT/build/firehose/obj" SYMROOT="$ROOT/build/firehose/sym" \
     DSTROOT="$ROOT/.cache/fakeroot" FAKEROOT_DIR="$ROOT/.cache/fakeroot"
@@ -35,7 +35,7 @@ else
   FAKEROOT=$ROOT/.cache/fakeroot
   OBJ=$ROOT/build/firehose/obj
   mkdir -p "$OBJ" "$FAKEROOT/usr/local/lib/kernel" "$FAKEROOT/usr/local/include/kernel/os"
-  xcrun -sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0 -Os -g -c \
+  xcrun -sdk iphoneos clang -arch arm64 -miphoneos-version-min="${UNIXNU_XNU_IOS_MIN:-17.0}" -Os -g -c \
     -mkernel -nostdinc -Wno-packed \
     -DKERNEL=1 -DDISPATCH_USE_DTRACE=0 -DOS_ATOMIC_CONFIG_MEMORY_ORDER_DEPENDENCY=1 \
     -DOS_ATOMIC_CONFIG_STARVATION_FREE_ONLY=0 \

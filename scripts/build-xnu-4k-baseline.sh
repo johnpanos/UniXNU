@@ -12,6 +12,41 @@ XNU_VERSION=${UNIXNU_XNU_VERSION:-10063.141.1}
 LIBPLATFORM_TAG=${UNIXNU_LIBPLATFORM_TAG:-libplatform-316.100.10}
 LIBDISPATCH_TAG=${UNIXNU_LIBDISPATCH_TAG:-libdispatch-1477.100.9}
 AVAILABILITY_TAG=${UNIXNU_AVAILABILITYVERSIONS_TAG:-AvailabilityVersions-141.1}
+# The deployment target of the kernel objects: the iOS release of the XNU source (feeds.toml ios_min).
+IOS_MIN=${UNIXNU_XNU_IOS_MIN:-17.0}
+# A patch series for another XNU release (feeds.toml patch_series, e.g. 8796): patches/xnu-<series>/NAME.patch replaces
+# patches/xnu/NAME.patch, patches/xnu-<series>/skip lists the names it leaves out, and its other patches join in name order.
+PATCH_SERIES=${UNIXNU_XNU_PATCH_SERIES:-}
+SERIES_DIR=
+if [ -n "$PATCH_SERIES" ]; then
+  SERIES_DIR=$ROOT/patches/xnu-$PATCH_SERIES
+  if [ ! -d "$SERIES_DIR" ]; then
+    echo "patch series $PATCH_SERIES: $SERIES_DIR missing" >&2
+    exit 1
+  fi
+fi
+# The XNU patch of NAME for this source: the series' replacement, nothing when the series skips it, else patches/xnu.
+xnu_patch() {
+  if [ -n "$SERIES_DIR" ]; then
+    if [ -f "$SERIES_DIR/skip" ] && grep -q "^$1[[:space:]]" "$SERIES_DIR/skip"; then
+      return 0
+    fi
+    if [ -f "$SERIES_DIR/$1" ]; then
+      echo "$SERIES_DIR/$1"
+      return 0
+    fi
+  fi
+  if [ -f "$ROOT/patches/xnu/$1" ]; then
+    echo "$ROOT/patches/xnu/$1"
+  fi
+}
+XNU_PATCHES=()
+for NAME in $( { (cd "$ROOT/patches/xnu" && ls -- *.patch); if [ -n "$SERIES_DIR" ]; then (cd "$SERIES_DIR" && ls -- *.patch 2>/dev/null); fi; } | LC_ALL=C sort -u); do
+  CHOSEN=$(xnu_patch "$NAME")
+  if [ -n "$CHOSEN" ]; then
+    XNU_PATCHES+=("$CHOSEN")
+  fi
+done
 if [ ! -d refer/xnu/.git ]; then
   git clone --depth 1 --branch "$XNU_TAG" https://github.com/apple-oss-distributions/xnu.git refer/xnu
 fi
@@ -35,9 +70,9 @@ fi
 # Remove them first so earlier independent patches retain their idempotent checks.
 # The same holds for the boot-time GPU addon mount and the staged system apps copy (zzy), which edit the owner Data mount function
 # inside the systemos patch. Reverse newest first; the loop below re-applies them in name order.
-for LATE_PATCH in "$ROOT/patches/xnu/zzz-boot-progress.patch" "$ROOT/patches/xnu/zzy-staged-system-apps.patch" \
-    "$ROOT/patches/xnu/zzy-native-gpu-addon-mount.patch"; do
-  if git -C .cache/xnu-work apply --reverse --check "$LATE_PATCH" >/dev/null 2>&1; then
+for LATE_NAME in zzz-boot-progress.patch zzy-staged-system-apps.patch zzy-native-gpu-addon-mount.patch; do
+  LATE_PATCH=$(xnu_patch "$LATE_NAME")
+  if [ -n "$LATE_PATCH" ] && git -C .cache/xnu-work apply --reverse --check "$LATE_PATCH" >/dev/null 2>&1; then
     git -C .cache/xnu-work apply --reverse "$LATE_PATCH"
   fi
 done
@@ -47,7 +82,7 @@ HOST_PATCHES=()
 if [ "${XNU_HOST_PATCHES:-}" = linux ]; then
   HOST_PATCHES=("$ROOT"/patches/xnu-linux/*.patch)
 fi
-for PATCH in "$ROOT"/patches/xnu/*.patch "$ROOT"/kits/NativePrelink/patches/*.patch ${HOST_PATCHES[@]+"${HOST_PATCHES[@]}"}; do
+for PATCH in "${XNU_PATCHES[@]}" "$ROOT"/kits/NativePrelink/patches/*.patch ${HOST_PATCHES[@]+"${HOST_PATCHES[@]}"}; do
   if ! git -C .cache/xnu-work apply --reverse --check "$PATCH" >/dev/null 2>&1; then
     git -C .cache/xnu-work apply --check "$PATCH"
     git -C .cache/xnu-work apply "$PATCH"
@@ -407,7 +442,8 @@ if [ "$OWNER_DATA_MOUNT" = 1 ] && [ "$OWNER_BOOT_MANIFEST" != 1 ]; then
   exit 1
 fi
 OWNER_DATA_HEADER=$ROOT/build/xnu/owner-data-volume.h
-python3 - "$OWNER_DATA_HEADER" "$OWNER_DATA_MOUNT" "$NATIVE_RAM_BLOCK" "${XNU_OWNER_DATA_VOLUME_UUID:-}" <<'PY_DATA_UUID'
+python3 - "$OWNER_DATA_HEADER" "$OWNER_DATA_MOUNT" "$NATIVE_RAM_BLOCK" "${XNU_OWNER_DATA_VOLUME_UUID:-}" \
+    "${XNU_OWNER_OS_VOLUME_UUID:-}" "${XNU_OWNER_SYSTEMOS_VOLUME_UUID:-}" <<'PY_DATA_UUID'
 from pathlib import Path
 import sys
 import uuid
@@ -419,6 +455,15 @@ if sys.argv[2:4] == ['1', '1']:
     except ValueError:
         raise SystemExit('Set XNU_OWNER_DATA_VOLUME_UUID to the actual observed scratch APFS volume UUID')
     text = '#define XNU_OWNER_DATA_VOLUME_UUID "' + value + '"\n'
+# The OS and SystemOS volumes of the target image, for the owner SystemOS mount of a patch series that does not
+# carry the 21H461 values (patches/xnu-8796); a defconfig without them leaves the header as it was.
+for name, value in (('XNU_OWNER_OS_VOLUME_UUID', sys.argv[5]), ('XNU_OWNER_SYSTEMOS_VOLUME_UUID', sys.argv[6])):
+    if value:
+        try:
+            value = str(uuid.UUID(value)).upper()
+        except ValueError:
+            raise SystemExit(f'{name} is not a UUID: {value}')
+        text += f'#define {name} "{value}"\n'
 path.parent.mkdir(parents=True, exist_ok=True)
 if not path.exists() or path.read_text() != text:
     path.write_text(text)
@@ -782,8 +827,8 @@ make -C .cache/xnu-work "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iph
   MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \
   ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG=arm64 LARGE_MEMORY_DEFINE=-UARM_LARGE_MEMORY \
   ARM64_LINK_ADDR=0xfffffff007004000 ARM64_PLKSEG_ADDR=0xfffffff004004000 \
-  DEPLOYMENT_TARGET_FLAGS="-miphoneos-version-min=17.0 -DXNU_TARGET_OS_IOS" \
-  DEPLOYMENT_LINKER_FLAGS="-Wl,-ios_version_min,17.0" \
+  DEPLOYMENT_TARGET_FLAGS="-miphoneos-version-min=$IOS_MIN -DXNU_TARGET_OS_IOS" \
+  DEPLOYMENT_LINKER_FLAGS="-Wl,-ios_version_min,$IOS_MIN" \
   RC_DARWIN_KERNEL_VERSION="$XNU_DARWIN" RC_ProjectSourceVersion="$XNU_VERSION" \
   BUILD_LTO=0 BOUND_CHECKS=0 BUILD_WERROR="${XNU_BUILD_WERROR:-0}" MAKEJOBS=-j"${JOBS:-4}" \
   CFLAGS_EXTRA="$EXTRA_CFLAGS" "${EXTRA_MAKE_ARGS[@]}" \

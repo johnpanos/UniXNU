@@ -43,7 +43,7 @@ def sources():
 
 def main():
     sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
-    flags = ['-arch', 'arm64', '-miphoneos-version-min=17.0', '-isysroot', sdk,
+    flags = ['-arch', 'arm64', f'-miphoneos-version-min={os.environ.get("UNIXNU_XNU_IOS_MIN", "17.0")}', '-isysroot', sdk,
              '-fPIC', '-O3', '-fvisibility=hidden', '-DVISIBILITY_HIDDEN', '-Wall', '-fomit-frame-pointer',
              '-mkernel', '-DKERNEL_USE', '-I', str(RT / 'include'),
              # XNU's headers first (sys/cdefs.h is XNU's in an SDK too), then Libc's and libplatform's.
@@ -52,10 +52,14 @@ def main():
              '-isystem', str(ROOT / 'refer/libpthread/include'), '-isystem', str(ROOT / 'refer/libpthread/include/pthread'),
              '-isystem', str(ROOT / 'refer/libdispatch'), '-isystem', str(ROOT / 'refer/dyld'),
              '-isystem', str(ROOT / 'refer/libmalloc'), '-isystem', str(FAKEROOT / 'usr/local/include'),
-             '-isystem', str(OUT / 'include'), '-I', str(ROOT / 'refer/llvm-third-party/siphash/include')]
+             '-isystem', str(OUT / 'include'), '-I', str(ROOT / 'refer/llvm-third-party/siphash/include'),
+             '-include', str(OUT / 'include/cc-kext-cdefs.h')]
     # gethostuuid.h is Libsyscall's (refer/xnu/libsyscall/wrappers); only it, the rest of that directory is not SDK API.
     (OUT / 'include').mkdir(parents=True, exist_ok=True)
     (OUT / 'include/gethostuuid.h').write_bytes((ROOT / 'refer/xnu/libsyscall/wrappers/gethostuuid.h').read_bytes())
+    # The libmalloc headers name sys/cdefs.h macros that older XNU (xnu-8796) does not define yet; defined as in xnu-10063.
+    (OUT / 'include/cc-kext-cdefs.h').write_text('#include <sys/cdefs.h>\n#ifndef __alloc_align\n#if __has_attribute(alloc_align)\n'
+                                                 '#define __alloc_align(n) __attribute__((alloc_align(n)))\n#else\n#define __alloc_align(n)\n#endif\n#endif\n')
     files = sources()
 
     def compile(source):
