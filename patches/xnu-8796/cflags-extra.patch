@@ -1,0 +1,27 @@
+xnu-8796 has no CFLAGS_EXTRA (xnu-10063's makedefs append it to CFLAGS). scripts/build-xnu-4k-baseline.sh passes the board's
+defines that way (XNU_BOOT_PROGRESS, XNU_NATIVE_PAN, the upstream clang warning exceptions); without this hook they never
+reached an 8796 compile, so the boot progress layer was compiled out of the fajita iOS 16 kernel.
+
+--- a/makedefs/MakeInc.def
++++ b/makedefs/MakeInc.def
+@@ -550,6 +550,10 @@ ifeq ($(SAN),1)
+ CFLAGS_GEN += -fsanitize-ignorelist=$(OBJROOT)/san/kasan-blacklist-$(CURRENT_ARCH_CONFIG_LC)
+ endif
+ 
++# Any extra flags that get passed at the command line during build (as in xnu-10063).
++ifeq ($(CFLAGS_EXTRA),)
++CFLAGS_EXTRA =
++endif
+ 
+ CFLAGS	= $(CFLAGS_GEN) \
+ 		  $($(addsuffix $(CURRENT_MACHINE_CONFIG),MACHINE_FLAGS_$(CURRENT_ARCH_CONFIG)_)) \
+@@ -560,7 +564,8 @@ CFLAGS	= $(CFLAGS_GEN) \
+ 		  $(DEPLOYMENT_TARGET_FLAGS) \
+ 		  $(DEPLOYMENT_TARGET_DEFINES) \
+ 		  $(BOUND_CHECKS_DEFINES) \
+-		  $(DEFINES)
++		  $(DEFINES) \
++		  $(CFLAGS_EXTRA)
+ 
+ #
+ # Default C++ flags

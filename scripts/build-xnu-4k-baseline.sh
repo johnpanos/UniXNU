@@ -823,6 +823,14 @@ if not stamp.exists() or stamp.read_text() != identity:
     stamp.write_text(identity)
 PY
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DXNU_BOOT_PROGRESS=$BOOT_PROGRESS"
+# make does not track compiler flags: the bootstrap pass (unixnu kernel.py, XNU_BOOT_PROGRESS=0) leaves objects behind that the
+# real pass would keep, with the boot progress hooks compiled out (fajita iOS 16, 2026-10-22: no monitor, no boot log). When the
+# extra flags differ from the last build's, touch the sources that test them so they recompile.
+FLAGS_STAMP="$ROOT/build/xnu/ios-obj/.extra-cflags"
+if [ -f "$FLAGS_STAMP" ] && [ "$(cat "$FLAGS_STAMP")" != "$EXTRA_CFLAGS" ]; then
+  grep -rlE 'XNU_BOOT_PROGRESS|XNU_NATIVE_PAN|XNU_SOURCE_CORECRYPTO14' .cache/xnu-work --include='*.[chs]' --include='*.cpp' | xargs -r touch
+fi
+mkdir -p "$(dirname "$FLAGS_STAMP")" && printf '%s' "$EXTRA_CFLAGS" > "$FLAGS_STAMP"
 make -C .cache/xnu-work "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" ARCH_CONFIGS=ARM64 ${HOST_MAKE_ARGS[@]+"${HOST_MAKE_ARGS[@]}"} \
   MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \
   ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG=arm64 LARGE_MEMORY_DEFINE=-UARM_LARGE_MEMORY \
