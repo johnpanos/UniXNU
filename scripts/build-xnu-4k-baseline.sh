@@ -70,7 +70,9 @@ fi
 # Remove them first so earlier independent patches retain their idempotent checks.
 # The same holds for the boot-time GPU addon mount and the staged system apps copy (zzy), which edit the owner Data mount function
 # inside the systemos patch. Reverse newest first; the loop below re-applies them in name order.
-for LATE_NAME in zzz-boot-progress.patch zzy-staged-system-apps.patch zzy-native-gpu-addon-mount.patch; do
+# A device patch can extend a series patch as well: fajita's zzv-native-dwc3-personality.patch adds a personality after the
+# ones of native-aes-personality.patch, whose reverse check then fails.
+for LATE_NAME in zzz-boot-progress.patch zzy-staged-system-apps.patch zzy-native-gpu-addon-mount.patch zzv-native-dwc3-personality.patch; do
   LATE_PATCH=$(xnu_patch "$LATE_NAME")
   if [ -n "$LATE_PATCH" ] && git -C .cache/xnu-work apply --reverse --check "$LATE_PATCH" >/dev/null 2>&1; then
     git -C .cache/xnu-work apply --reverse "$LATE_PATCH"

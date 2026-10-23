@@ -3,3 +3,4 @@ offline-pgz-alignment-probe.patch   xnu-8796 has no zone_id_require_aligned(), w
 pgz-aligned-validation.patch        fixes zone_id_require_aligned(), which xnu-8796 does not have
 public-entitlements-header.patch     xnu-8796 never includes the non-public CodeSignature/Entitlements.h
 published-freezer-condition.patch    fixes a malformed #if of xnu-10063 that xnu-8796 does not have
+disabled-deferred-reclaim.patch     fixes a (void) indices; of xnu-10063, whose function lost the parameter; xnu-8796's still has it
