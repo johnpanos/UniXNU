@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 TOOLS = {'clang': str(HERE / 'darwin-cc'), 'clang++': str(HERE / 'darwin-c++'), 'cc': str(HERE / 'darwin-cc'),
          'c++': str(HERE / 'darwin-c++'), 'ld': str(HERE / 'ld'), 'lipo': 'llvm-lipo', 'libtool': 'llvm-libtool-darwin',
          'otool': 'llvm-otool', 'nm': 'llvm-nm', 'strip': 'llvm-strip', 'ar': 'llvm-ar', 'ranlib': 'llvm-ranlib',
-         'c++filt': 'llvm-cxxfilt', 'dsymutil': 'dsymutil', 'install_name_tool': 'llvm-install-name-tool',
+         'c++filt': 'llvm-cxxfilt', 'dsymutil': 'dsymutil', 'dwarfdump': 'llvm-dwarfdump', 'install_name_tool': 'llvm-install-name-tool',
          'gm4': 'm4', 'plutil': str(HERE / 'plutil'),
          'mig': os.environ.get('UNIXNU_MIG', 'mig'), 'migcom': os.environ.get('UNIXNU_MIGCOM', 'migcom'),
          'iig': os.environ.get('UNIXNU_IIG', '')}

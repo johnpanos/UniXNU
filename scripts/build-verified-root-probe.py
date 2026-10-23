@@ -36,11 +36,16 @@ metadata = json.loads((policy_dir / 'verification.json').read_text())
 image = ROOT / '.cache/firmware/target-volumes/044-76034-038.dmg'
 manifest = policy_dir / 'manifest.bin'
 key = policy_dir / 'trusted-key.bin'
-expected_digest = ('e5634d04a8ac35f024845f583394e0a35deb26a04cb0c00286a8674e25a9a4f2' if args.component == 'os' else
-                   'b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f')
-expected_count = 1483785 if args.component == 'os' else 806400
-if (metadata['image_sha256'] != expected_digest or
-        metadata['blocks_verified'] != expected_count or not metadata['real_c_signature_and_block_verification'] or
+# The unchanged original images this probe accepts: (expanded sha256, 4096-byte blocks) of OS and SystemOS per build.
+ORIGINAL_IMAGES = {
+    '21H461': dict(os=('e5634d04a8ac35f024845f583394e0a35deb26a04cb0c00286a8674e25a9a4f2', 1483785),
+                   systemos=('b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f', 806400)),
+    '20H392': dict(os=('6e87bfcaa8eca952e00b719f333d1f1060715a63566112267ad8730e1ed98906', 1375753),
+                   systemos=('9cd738f3b0169055549df84ad6d8d13e50a2da39af618ce0522ca4e06df86849', 669696)),
+}
+build = next((b for b, images in ORIGINAL_IMAGES.items()
+              if (metadata['image_sha256'], metadata['blocks_verified']) == images[args.component]), None)
+if (build is None or not metadata['real_c_signature_and_block_verification'] or
         hashlib.sha256(key.read_bytes()).hexdigest() != metadata['trusted_key_sha256']):
     raise SystemExit('Require the actually verified unchanged original full image and explicit test anchor')
 original_manifest_sha256 = hashlib.sha256(manifest.read_bytes()).hexdigest()
@@ -103,12 +108,12 @@ policy_records = [dict(manifest_sha256=hashlib.sha256(manifest.read_bytes()).hex
 if args.include_systemos:
     extra_dir = ROOT / 'build/verified-root-systemos'
     extra_meta = json.loads((extra_dir / 'verification.json').read_text())
-    if (extra_meta['image_sha256'] != 'b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f' or
-            extra_meta['blocks_verified'] != 806400 or not extra_meta['real_c_signature_and_block_verification'] or
+    if ((extra_meta['image_sha256'], extra_meta['blocks_verified']) != ORIGINAL_IMAGES[build]['systemos'] or not extra_meta['real_c_signature_and_block_verification'] or
             (extra_dir / 'trusted-key.bin').read_bytes() != key.read_bytes()):
         raise SystemExit('Require separately fully verified original SystemOS under the same independent anchor')
     extra = extra_dir / 'manifest.bin'
-    policy_records.append(dict(manifest_sha256=hashlib.sha256(extra.read_bytes()).hexdigest(), image_bytes=3303014400))
+    policy_records.append(dict(manifest_sha256=hashlib.sha256(extra.read_bytes()).hexdigest(),
+                               image_bytes=struct.unpack_from('<Q', extra.read_bytes(), 24)[0]))
     bundle_assembly = '''.balign 8
 .globl _verified_root_systemos_manifest
 _verified_root_systemos_manifest:
@@ -145,7 +150,12 @@ for source in (ROOT / 'kits/VerifiedRoot/src/verified_root.c', ROOT / 'kits/Veri
     # The record carries -Weverything with the exceptions XNU knows; upstream clang 19+ adds groups Apple's clang does not
     # have here (-Wunsafe-buffer-usage and its libc variant), which -Werror would turn into failures.
     command += ['-I' + str(ROOT / 'kits/VerifiedRoot/include'), '-Werror', '-Wno-unknown-warning-option',
-                '-Wno-unsafe-buffer-usage', '-Wno-unsafe-buffer-usage-in-libc-call']
+                '-Wno-unsafe-buffer-usage', '-Wno-unsafe-buffer-usage-in-libc-call',
+                # and the xnu-8796 records (iOS 16) leave out the exceptions the XNU build adds for upstream clang
+                # (scripts/build-xnu-4k-baseline.sh EXTRA_CFLAGS)
+                '-Wno-reserved-identifier', '-Wno-pre-c11-compat', '-Wno-missing-designated-field-initializers',
+                '-Wno-suggest-override', '-Wno-unnecessary-virtual-specifier', '-Wno-suggest-destructor-override',
+                '-Wno-ms-bitfield-padding', '-Wno-cast-function-type-strict']
     result = subprocess.run(command, cwd=record['directory'], capture_output=True, text=True)
     (out / (source.stem + '.log')).write_text(result.stdout + result.stderr)
     if result.returncode:

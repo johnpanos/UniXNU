@@ -93,8 +93,12 @@ def check_args(arguments):
     return line
 
 
-def check_native_root(kernel, arguments):
+def check_native_root(kernel, arguments, adt=None):
     """Refuse the known bare-metal AMFI panic before the volume is written."""
+    # An ADT with /defaults vmm-present (the fajita iOS 16 board: [payload.adt] args --vmm-present) makes the 20H392 AMFI skip its
+    # PMGR wait and latch (kern.hv_vmm_present), so that board needs no sheng PMGR.
+    if '--vmm-present' in [str(value) for value in (adt or {}).get('args', [])]:
+        return
     values = {}
     for argument in arguments:
         key, separator, value = argument.partition('=')
@@ -149,7 +153,7 @@ def build(ctx, kernel=None):
     names = {item.split('=', 1)[0] for item in extra}
     arguments = [item for item in spec.get('kernel_args', []) if item.split('=', 1)[0] not in names] + extra
     line = check_args(arguments)
-    check_native_root(kernel, arguments)
+    check_native_root(kernel, arguments, spec.get('adt'))
     owner_trust = getattr(args, 'owner_trust_cache', None)
     trust = expand(owner_trust or args.trust_cache) if (owner_trust or getattr(args, 'trust_cache', None)) else None
     if trust:

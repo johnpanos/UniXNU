@@ -28,6 +28,11 @@ import os
 # kernel objects carry, so the archives match it.
 IOS_MIN = os.environ.get('UNIXNU_XNU_IOS_MIN', '17.0')
 IOS_TARGET = f'arm64-apple-ios{IOS_MIN}'
+# The original kernelcaches the audit qualifies against (sha256 of the decompressed kernelcache).
+ORIGINAL_KERNELCACHES = {
+    'f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7': '21H461 (iPadOS 17.7.11, iPad7,1)',
+    '2ec297bac95bcba01046fd0148e97e7e5885c05a6c18827f39f534ba375c1221': '20H392 (iOS 16.7.16, iPhone10,6)',
+}
 IOS_DEPLOYMENT = (2, int(IOS_MIN.split('.')[0]) << 16 | int((IOS_MIN.split('.') + ['0'])[1]) << 8)
 source = ROOT / 'refer/IOStorageFamily'
 revision = subprocess.check_output(['git', '-C', source, 'rev-parse', 'HEAD'], text=True).strip()
@@ -64,7 +69,8 @@ while index < len(arguments):
 command += ['-I', str(out / 'include'), '-I', str(ROOT / '.cache/xnu-work/osfmk'),
             '-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter', '-Wno-deprecated-declarations',
             '-Wno-c99-designator', '-Wno-reorder-init-list', '-Wno-unnecessary-virtual-specifier',
-            '-Wno-deprecated-enum-enum-conversion']
+            '-Wno-deprecated-enum-enum-conversion', '-Wno-unknown-warning-option',
+            '-Wno-missing-designated-field-initializers']
 (out / 'compile-command.json').write_text(json.dumps(command, indent=2) + '\n')
 r = subprocess.run(command, cwd=record['directory'], capture_output=True, text=True)
 (out / 'compile.log').write_text(r.stdout + r.stderr)
@@ -84,7 +90,7 @@ dwarf = subprocess.check_output(['xcrun', 'dwarfdump', '--name=IOBlockStorageDev
 class_size = re.search(r'DW_AT_name\s+\("IOBlockStorageDevice"\)[\s\S]{0,200}?DW_AT_byte_size\s+\((0x[0-9a-f]+)\)', dwarf)
 require(class_size and int(class_size[1], 16) == 0x90, 'Actual compiled public class size changed')
 version_command = next(at for command, at, size in om['commands'] if command == 0x32)
-require(struct.unpack_from('<II', obj, version_command + 8) == IOS_DEPLOYMENT, 'Expected iOS 17 reference deployment')
+require(struct.unpack_from('<II', obj, version_command + 8) == IOS_DEPLOYMENT, f'Expected iOS {IOS_MIN} reference deployment')
 sycmd = next(at for command, at, size in om['commands'] if command == 2)
 symoff, count, stroff, _ = struct.unpack_from('<4I', obj, sycmd + 8)
 symbols = []
@@ -112,7 +118,7 @@ kernel_path = args.candidate
 kernel = kernel_path.read_bytes()
 plan = json.loads(kernel_path.with_suffix('.json').read_text())
 require(hashlib.sha256(kernel).hexdigest() == plan['candidate_sha256'] and
-        plan['original_sha256'] == 'f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7', 'Unexpected original candidate provenance')
+        plan['original_sha256'] in ORIGINAL_KERNELCACHES, 'Unexpected original candidate provenance')
 native = np.macho(kernel)
 exports = np.exports(kernel, native)
 by_name = {name: va for va, names in exports.items() for name in names}
