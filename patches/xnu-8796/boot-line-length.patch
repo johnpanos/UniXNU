@@ -1,0 +1,16 @@
+xnu-8796's arm64 boot_args carry a 608-byte command line; xnu-10063 (the iPad board) and DarwinBoot use 1024. The loader writes the
+1024-byte layout, so on 8796 the kernel kept only the first 607 characters of the fajita iOS 16 command line (the display, HID,
+keystore, autoreset and diag-export arguments never arrived) and read bootFlags and memSizeActual from the middle of the
+command line. Use the loader's layout.
+
+--- a/pexpert/pexpert/arm64/boot.h
++++ b/pexpert/pexpert/arm64/boot.h
+@@ -23,7 +23,7 @@
+  * This value matches iBoot's IBOOT_MAX_ENV_VAR_DATA_SIZE.
+  * There are no iBoot headers so have to duplicate it here for now.
+  */
+-#define BOOT_LINE_LENGTH        608
++#define BOOT_LINE_LENGTH        1024
+ 
+ /*
+  * Video information..
