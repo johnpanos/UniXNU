@@ -88,8 +88,10 @@ def check_args(arguments):
             raise Error(f'unsupported kernel argument: {value}')
     line = ' '.join(arguments)
     # DarwinBoot copies the command line into a 1024-byte buffer and refuses a longer one.
-    if len(line) > 1000:
-        raise Error(f'the kernel command line is {len(line)} bytes; the limit is 1000')
+    # 1020 leaves room for the terminator in the 1024-byte buffer (DarwinBoot, and the kernel's boot_args since
+    # patches/xnu-8796/boot-line-length.patch on xnu-8796).
+    if len(line) > 1020:
+        raise Error(f'the kernel command line is {len(line)} bytes; the limit is 1020')
     return line
 
 
