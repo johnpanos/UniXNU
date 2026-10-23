@@ -394,10 +394,10 @@ index 0000000..1be9fa9
 +}
 diff --git a/libkern/amfi/miniamfi.c b/libkern/amfi/miniamfi.c
 new file mode 100644
-index 0000000..bf7da04
+index 0000000..f4315f7
 --- /dev/null
 +++ b/libkern/amfi/miniamfi.c
-@@ -0,0 +1,313 @@
+@@ -0,0 +1,492 @@
 +/*
 + * Ported from HackiOS (github.com/oosexgang/hackios-xnu-kernel), APSL 2.0.
 + * Stand-in for the AppleMobileFileIntegrity kext interface.
@@ -547,20 +547,135 @@ index 0000000..bf7da04
 +	return miniamfi_entitlement_object(proc, entitlement_name, entitlement_object);
 +}
 +
-+/* libTrustCache: there are no trust caches, so nothing loads and nothing is found */
-+
 +/*
-+ * Our board loads the static trust cache (fajita_ios16_display_defconfig: CONFIG_XNU_TRUST_CACHE_RUNTIME),
-+ * which HackiOS's kernel does not. load_static_trust_cache() panics if loading the first (static) module
-+ * fails, so loadModule and load report success and keep nothing: no cache is consulted -- every ad hoc
-+ * binary is a platform binary through mpo_vnode_check_signature above, as on HackiOS -- and every query
-+ * below answers "not found". The TrustCache_t the caller passes is left as it was (zeroed), which is read
-+ * back only through these same stand-in ops.
++ * libTrustCache: a minimal in-kernel reimplementation that actually holds the modules.
++ *
++ * This board loads the static system trust cache (fajita_ios16_display_defconfig:
++ * CONFIG_XNU_TRUST_CACHE_RUNTIME; the payload's --trust-cache bundle), which HackiOS's kernel
++ * does not. load_static_trust_cache() hands each module to loadModule below and panics if the
++ * first (static) one fails, so loadModule validates the module and links it onto the runtime's
++ * own lists -- exactly as Apple's closed libTrustCache would -- and query walks those lists and
++ * answers truthfully. This is what lets the AppleMobileFileIntegrity IOService stand-in
++ * (iokit/Kernel/IOStartIOKit.cpp) answer launchd_cache_loader's cdhash checks through the
++ * kernel's own query_trust_cache().
++ *
++ * Platform-binary status for ad hoc signed OS binaries is still granted in
++ * mpo_vnode_check_signature above (there is no per-binary signature check here); the trust cache
++ * is consulted only where the system asks "is this exact cdhash trusted?".
++ *
++ * Entries in a v1/v2 module are sorted by cdhash, so each module is binary-searched. v0 modules
++ * (unsorted, bridgeOS-only, never present here) are scanned linearly.
 + */
-+static TCReturn_t
-+mini_tc_loadModule(__unused TrustCacheRuntime_t *runtime, __unused const TCType_t type, __unused TrustCache_t *trustCache,
-+    __unused const uintptr_t dataAddr, __unused const size_t dataSize)
++
++/* Stride and first-entry offset for a module version; false if the version is unsupported. */
++static bool
++mini_tc_module_layout(uint32_t version, size_t *entryOff, size_t *entrySize, bool *sorted)
 +{
++	switch (version) {
++	case 0: *entryOff = sizeof(TrustCacheModule0_t); *entrySize = sizeof(TrustCacheEntry0_t); *sorted = false; return true;
++	case 1: *entryOff = sizeof(TrustCacheModule1_t); *entrySize = sizeof(TrustCacheEntry1_t); *sorted = true; return true;
++	case 2: *entryOff = sizeof(TrustCacheModule2_t); *entrySize = sizeof(TrustCacheEntry2_t); *sorted = true; return true;
++	default: return false;
++	}
++}
++
++static uint32_t
++mini_tc_module_num_entries(const TrustCacheModuleBase_t *base)
++{
++	switch (base->version) {
++	case 0: return ((const TrustCacheModule0_t *)base)->numEntries;
++	case 1: return ((const TrustCacheModule1_t *)base)->numEntries;
++	case 2: return ((const TrustCacheModule2_t *)base)->numEntries;
++	default: return 0;
++	}
++}
++
++/* Find CDHash within a single module; returns the matched entry or NULL. */
++static const void *
++mini_tc_find_in_module(const TrustCacheModuleBase_t *base, const uint8_t CDHash[kTCEntryHashSize])
++{
++	size_t entryOff, entrySize;
++	bool sorted;
++
++	if (base == NULL || !mini_tc_module_layout(base->version, &entryOff, &entrySize, &sorted)) {
++		return NULL;
++	}
++
++	uint32_t n = mini_tc_module_num_entries(base);
++	const uint8_t *entries = (const uint8_t *)base + entryOff;
++
++	if (sorted) {
++		uint32_t lo = 0, hi = n;
++		while (lo < hi) {
++			uint32_t mid = lo + (hi - lo) / 2;
++			const uint8_t *e = entries + (size_t)mid * entrySize;
++			int cmp = memcmp(CDHash, e, kTCEntryHashSize);
++			if (cmp == 0) {
++				return e;
++			} else if (cmp < 0) {
++				hi = mid;
++			} else {
++				lo = mid + 1;
++			}
++		}
++		return NULL;
++	}
++
++	for (uint32_t i = 0; i < n; i++) {
++		const uint8_t *e = entries + (size_t)i * entrySize;
++		if (memcmp(CDHash, e, kTCEntryHashSize) == 0) {
++			return e;
++		}
++	}
++	return NULL;
++}
++
++static TCReturn_t
++mini_tc_loadModule(TrustCacheRuntime_t *runtime, const TCType_t type, TrustCache_t *trustCache,
++    const uintptr_t dataAddr, const size_t dataSize)
++{
++	if (runtime == NULL || trustCache == NULL || dataAddr == 0) {
++		return buildTCRet(kTCComponentLoadModule, kTCReturnInvalidArguments, 0);
++	}
++	if (dataSize < sizeof(TrustCacheModuleBase_t)) {
++		return buildTCRet(kTCComponentLoadModule, kTCReturnInsufficientLength, 0);
++	}
++
++	const TrustCacheModuleBase_t *base = (const TrustCacheModuleBase_t *)dataAddr;
++	size_t entryOff, entrySize;
++	bool sorted;
++	if (!mini_tc_module_layout(base->version, &entryOff, &entrySize, &sorted)) {
++		return buildTCRet(kTCComponentLoadModule, kTCReturnInvalidModule, 0);
++	}
++
++	/* The entry array must fit inside the module bytes we were handed. */
++	uint32_t n = mini_tc_module_num_entries(base);
++	if (dataSize < entryOff || (dataSize - entryOff) / entrySize < n) {
++		return buildTCRet(kTCComponentLoadModule, kTCReturnInsufficientLength, 0);
++	}
++
++	trustCache->prev = NULL;
++	trustCache->type = type;
++	trustCache->moduleSize = dataSize;
++	trustCache->module = base;
++
++	/* Static and engineering caches are immutable roots; everything else is loadable. */
++	TrustCache_t **head;
++	if (type == kTCTypeStatic) {
++		head = &runtime->staticTCHead;
++	} else if (type == kTCTypeEngineering) {
++		head = &runtime->engineeringTCHead;
++	} else if (runtime->mutableRT != NULL) {
++		head = &runtime->mutableRT->loadableTCHead;
++	} else {
++		return buildTCRet(kTCComponentLoadModule, kTCReturnInvalidArguments, 0);
++	}
++	trustCache->next = *head;
++	if (*head != NULL) {
++		(*head)->prev = trustCache;
++	}
++	*head = trustCache;
++
 +	return buildTCRet(kTCComponentLoadModule, kTCReturnSuccess, 0);
 +}
 +
@@ -573,9 +688,40 @@ index 0000000..bf7da04
 +}
 +
 +static TCReturn_t
-+mini_tc_query(__unused const TrustCacheRuntime_t *runtime, __unused TCQueryType_t queryType,
-+    __unused const uint8_t CDHash[kTCEntryHashSize], __unused TrustCacheQueryToken_t *queryToken)
++mini_tc_query(const TrustCacheRuntime_t *runtime, TCQueryType_t queryType,
++    const uint8_t CDHash[kTCEntryHashSize], TrustCacheQueryToken_t *queryToken)
 +{
++	if (runtime == NULL || CDHash == NULL || queryToken == NULL) {
++		return buildTCRet(kTCComponentQuery, kTCReturnInvalidArguments, 0);
++	}
++
++	/* The lists to walk, in order, for this query type (matching libTrustCache's semantics). */
++	const TrustCache_t *lists[3];
++	uint32_t count = 0;
++	if (queryType == kTCQueryTypeAll || queryType == kTCQueryTypeStatic) {
++		lists[count++] = runtime->staticTCHead;
++		lists[count++] = runtime->engineeringTCHead;
++	}
++	if (queryType == kTCQueryTypeAll || queryType == kTCQueryTypeLoadable) {
++		lists[count++] = runtime->mutableRT ? runtime->mutableRT->loadableTCHead : NULL;
++	}
++	if (count == 0) {
++		return buildTCRet(kTCComponentQuery, kTCReturnInvalidArguments, 0);
++	}
++
++	for (uint32_t i = 0; i < count; i++) {
++		for (const TrustCache_t *tc = lists[i]; tc != NULL; tc = tc->next) {
++			const void *entry = mini_tc_find_in_module(tc->module, CDHash);
++			if (entry != NULL) {
++				queryToken->trustCache = tc;
++				queryToken->trustCacheEntry = entry;
++				return buildTCRet(kTCComponentQuery, kTCReturnSuccess, 0);
++			}
++		}
++	}
++
++	queryToken->trustCache = NULL;
++	queryToken->trustCacheEntry = NULL;
 +	return buildTCRet(kTCComponentQuery, kTCReturnNotFound, 0);
 +}
 +
@@ -587,9 +733,13 @@ index 0000000..bf7da04
 +}
 +
 +static TCReturn_t
-+mini_tc_queryGetTCType(__unused const TrustCacheQueryToken_t *queryToken, __unused TCType_t *typeRet)
++mini_tc_queryGetTCType(const TrustCacheQueryToken_t *queryToken, TCType_t *typeRet)
 +{
-+	return buildTCRet(kTCComponentQueryTCType, kTCReturnInvalidArguments, 0);
++	if (queryToken == NULL || queryToken->trustCache == NULL || typeRet == NULL) {
++		return buildTCRet(kTCComponentQueryTCType, kTCReturnInvalidArguments, 0);
++	}
++	*typeRet = queryToken->trustCache->type;
++	return buildTCRet(kTCComponentQueryTCType, kTCReturnSuccess, 0);
 +}
 +
 +static TCReturn_t
@@ -599,21 +749,50 @@ index 0000000..bf7da04
 +}
 +
 +static TCReturn_t
-+mini_tc_queryGetHashType(__unused const TrustCacheQueryToken_t *queryToken, __unused uint8_t *hashTypeRet)
++mini_tc_queryGetHashType(const TrustCacheQueryToken_t *queryToken, uint8_t *hashTypeRet)
 +{
-+	return buildTCRet(kTCComponentQueryHashType, kTCReturnInvalidArguments, 0);
++	if (queryToken == NULL || queryToken->trustCache == NULL ||
++	    queryToken->trustCacheEntry == NULL || hashTypeRet == NULL) {
++		return buildTCRet(kTCComponentQueryHashType, kTCReturnInvalidArguments, 0);
++	}
++	/* hashType follows the 20-byte CDHash in v1/v2 entries; v0 carries none. */
++	if (queryToken->trustCache->module->version == 0) {
++		*hashTypeRet = 0;
++	} else {
++		*hashTypeRet = ((const uint8_t *)queryToken->trustCacheEntry)[kTCEntryHashSize];
++	}
++	return buildTCRet(kTCComponentQueryHashType, kTCReturnSuccess, 0);
 +}
 +
 +static TCReturn_t
-+mini_tc_queryGetFlags(__unused const TrustCacheQueryToken_t *queryToken, __unused uint64_t *flagsRet)
++mini_tc_queryGetFlags(const TrustCacheQueryToken_t *queryToken, uint64_t *flagsRet)
 +{
-+	return buildTCRet(kTCComponentQueryFlags, kTCReturnInvalidArguments, 0);
++	if (queryToken == NULL || queryToken->trustCache == NULL ||
++	    queryToken->trustCacheEntry == NULL || flagsRet == NULL) {
++		return buildTCRet(kTCComponentQueryFlags, kTCReturnInvalidArguments, 0);
++	}
++	if (queryToken->trustCache->module->version == 0) {
++		*flagsRet = 0;
++	} else {
++		*flagsRet = ((const uint8_t *)queryToken->trustCacheEntry)[kTCEntryHashSize + 1];
++	}
++	return buildTCRet(kTCComponentQueryFlags, kTCReturnSuccess, 0);
 +}
 +
 +static TCReturn_t
-+mini_tc_queryGetConstraintCategory(__unused const TrustCacheQueryToken_t *queryToken, __unused uint8_t *constraintCategoryRet)
++mini_tc_queryGetConstraintCategory(const TrustCacheQueryToken_t *queryToken, uint8_t *constraintCategoryRet)
 +{
-+	return buildTCRet(kTCComponentQueryConstraintCategory, kTCReturnInvalidArguments, 0);
++	if (queryToken == NULL || queryToken->trustCache == NULL ||
++	    queryToken->trustCacheEntry == NULL || constraintCategoryRet == NULL) {
++		return buildTCRet(kTCComponentQueryConstraintCategory, kTCReturnInvalidArguments, 0);
++	}
++	/* Only v2 entries carry a constraint category. */
++	if (queryToken->trustCache->module->version >= 2) {
++		*constraintCategoryRet = ((const uint8_t *)queryToken->trustCacheEntry)[kTCEntryHashSize + 2];
++	} else {
++		*constraintCategoryRet = 0;
++	}
++	return buildTCRet(kTCComponentQueryConstraintCategory, kTCReturnSuccess, 0);
 +}
 +
 +static TCReturn_t
@@ -948,3 +1127,175 @@ index bec97fb..203e1f4 100644
  #endif
  
  #if CONFIG_DTRACE
+diff --git a/iokit/Kernel/IOStartIOKit.cpp b/iokit/Kernel/IOStartIOKit.cpp
+index d74c063..aca33f8 100644
+--- a/iokit/Kernel/IOStartIOKit.cpp
++++ b/iokit/Kernel/IOStartIOKit.cpp
+@@ -177,6 +177,157 @@ ConfigureIOKit(void)
+ 	gRootNub->configureDefaults();
+ }
+ 
++/*********************************************************************
++* fajita (OnePlus 6T, xnu-8796): the AppleMobileFileIntegrity IOService stand-in.
++*
++* Apple's AMFI kext stays prelinked but is never started (libkern/c++/OSKext.cpp), so the
++* "AppleMobileFileIntegrity" IOService it would publish never appears. launchd starts
++* /usr/libexec/launchd_cache_loader, which looks that service up, opens a user client (type 0)
++* and calls selector 6 with the program's cdhash as the structure input to ask whether the hash
++* is in a loaded trust cache; it reads only the return code -- kIOReturnSuccess means trusted,
++* kIOReturnNotFound means not in the trust cache -- and panics launchd if the service is absent.
++*
++* This publishes a minimal service of that class with a user client that answers selector 6
++* truthfully, by looking the cdhash up in the kernel's own loaded trust caches through
++* query_trust_cache() (the static system trust cache is held by libkern/amfi/miniamfi.c). It is
++* gated by the same fajita-security-kexts boot-arg: with the Apple kexts started instead, this
++* does not publish and the real AMFI service appears.
++*********************************************************************/
++extern "C" bool fajita_security_standins(void);
++
++/* TrustCacheQueryToken_t: two pointers (TrustCache/Types.h); we only need the return value. */
++struct fajita_tc_query_token {
++	const void *trustCache;
++	const void *trustCacheEntry;
++};
++/* bsd/kern/kern_trustcache.c; kTCQueryTypeAll == 0, KERN_SUCCESS when the cdhash is trusted. */
++extern "C" kern_return_t query_trust_cache(uint8_t query_type,
++    const uint8_t cdhash[20], struct fajita_tc_query_token *query_token);
++
++#define kFajitaAMFICheckTrustCacheSelector  6
++#define kFajitaCDHashLength                 20
++
++class FajitaAMFIUserClient : public IOUserClient {
++	OSDeclareDefaultStructors(FajitaAMFIUserClient);
++
++public:
++	virtual bool initWithTask(task_t owningTask, void *securityID, UInt32 type,
++	    OSDictionary *properties) APPLE_KEXT_OVERRIDE;
++	virtual IOReturn clientClose(void) APPLE_KEXT_OVERRIDE;
++	virtual IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *args,
++	    IOExternalMethodDispatch *dispatch, OSObject *target, void *reference) APPLE_KEXT_OVERRIDE;
++};
++
++class AppleMobileFileIntegrity : public IOService {
++	OSDeclareDefaultStructors(AppleMobileFileIntegrity);
++
++public:
++	virtual IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type,
++	    OSDictionary *properties, IOUserClient **handler) APPLE_KEXT_OVERRIDE;
++};
++
++OSDefineMetaClassAndStructors(FajitaAMFIUserClient, IOUserClient);
++OSDefineMetaClassAndStructors(AppleMobileFileIntegrity, IOService);
++
++bool
++FajitaAMFIUserClient::initWithTask(task_t owningTask, void *securityID, UInt32 type,
++    OSDictionary *properties)
++{
++	return IOUserClient::initWithTask(owningTask, securityID, type, properties);
++}
++
++IOReturn
++FajitaAMFIUserClient::clientClose(void)
++{
++	if (!isInactive()) {
++		terminate();
++	}
++	return kIOReturnSuccess;
++}
++
++IOReturn
++FajitaAMFIUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
++    IOExternalMethodDispatch *dispatch, OSObject *target, void *reference)
++{
++	/* Only the trust-cache check is implemented; it is all launchd_cache_loader asks for. */
++	if (selector != kFajitaAMFICheckTrustCacheSelector) {
++		return IOUserClient::externalMethod(selector, args, dispatch, target, reference);
++	}
++	if (args == NULL) {
++		return kIOReturnBadArgument;
++	}
++
++	uint8_t cdhash[kFajitaCDHashLength];
++	if (args->structureInput != NULL && args->structureInputSize >= kFajitaCDHashLength) {
++		/* cdhashes in the trust cache are truncated to 20 bytes; use the leading bytes. */
++		memcpy(cdhash, args->structureInput, kFajitaCDHashLength);
++	} else if (args->structureInputDescriptor != NULL &&
++	    args->structureInputDescriptor->getLength() >= kFajitaCDHashLength) {
++		IOMemoryDescriptor *md = args->structureInputDescriptor;
++		if (md->prepare(kIODirectionOut) != kIOReturnSuccess) {
++			return kIOReturnVMError;
++		}
++		IOByteCount got = md->readBytes(0, cdhash, kFajitaCDHashLength);
++		md->complete();
++		if (got != kFajitaCDHashLength) {
++			return kIOReturnBadArgument;
++		}
++	} else {
++		return kIOReturnBadArgument;
++	}
++
++	struct fajita_tc_query_token token = { NULL, NULL };
++	kern_return_t kr = query_trust_cache(0 /* kTCQueryTypeAll */, cdhash, &token);
++	if (kr == KERN_SUCCESS) {
++		return kIOReturnSuccess;        /* cdhash is trusted */
++	}
++	return kIOReturnNotFound;               /* not in any loaded trust cache */
++}
++
++IOReturn
++AppleMobileFileIntegrity::newUserClient(task_t owningTask, void *securityID, UInt32 type,
++    OSDictionary *properties, IOUserClient **handler)
++{
++	FajitaAMFIUserClient *client = OSTypeAlloc(FajitaAMFIUserClient);
++	if (client == NULL) {
++		return kIOReturnNoMemory;
++	}
++	if (!client->initWithTask(owningTask, securityID, type, properties)) {
++		client->release();
++		return kIOReturnBadArgument;
++	}
++	if (!client->attach(this)) {
++		client->release();
++		return kIOReturnInternalError;
++	}
++	if (!client->start(this)) {
++		client->detach(this);
++		client->release();
++		return kIOReturnInternalError;
++	}
++	*handler = client;
++	return kIOReturnSuccess;
++}
++
++static void
++fajita_publish_amfi_standin(void)
++{
++	if (!fajita_security_standins()) {
++		return;         /* fajita-security-kexts=1: Apple's AMFI publishes the real service */
++	}
++
++	AppleMobileFileIntegrity *amfi = OSTypeAlloc(AppleMobileFileIntegrity);
++	if (amfi == NULL) {
++		panic("fajita: failed to allocate AppleMobileFileIntegrity stand-in");
++	}
++	if (!amfi->init() || !amfi->attach(gRootNub)) {
++		panic("fajita: failed to attach AppleMobileFileIntegrity stand-in");
++	}
++	/* Publish synchronously so the service is in the registry before user space looks it up. */
++	amfi->registerService(kIOServiceSynchronous);
++	amfi->release();
++}
++
+ void
+ StartIOKitMatching(void)
+ {
+@@ -187,6 +338,9 @@ StartIOKitMatching(void)
+ 		panic("Failed to start IOService matching");
+ 	}
+ 
++	/* fajita: publish the AppleMobileFileIntegrity stand-in the started AMFI kext would have. */
++	fajita_publish_amfi_standin();
++
+ #if !NO_KEXTD
+ 	if (OSKext::iokitDaemonAvailable()) {
+ 		/* Add a busy count to keep the registry busy until the IOKit daemon has
