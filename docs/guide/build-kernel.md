@@ -96,7 +96,7 @@ The builders read symbol names through `scripts/xnu_symbols.py`. It uses the rec
 
 The kernel step prepares the public `IOStorageFamily` headers under `build/storage-abi/include` before the archive builders.
 
-`build-native-aes-bindings.py` and `build-native-adreno-accelerator.py` use the recorded audit results in `scripts/data/` when the original hardware evidence is absent. The recorded addresses belong to the kernelcache pinned in `board.toml`.
+`build-native-aes-bindings.py` and `build-native-adreno-accelerator.py` use the recorded audit results in `scripts/data/` when the original hardware evidence is absent. The recorded addresses belong to the kernelcache pinned in `board.toml`. The kernel step passes that pin (`[kernel.prelink] kernelcache_sha256`) to the builders as `UNIXNU_KERNELCACHE_SHA256`; `build-native-aes-bindings.py` picks the record of that kernelcache (21H461 or 20H392) and refuses any other.
 
 ## Build sequence
 

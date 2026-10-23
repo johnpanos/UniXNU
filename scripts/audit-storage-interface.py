@@ -119,6 +119,9 @@ kernel = kernel_path.read_bytes()
 plan = json.loads(kernel_path.with_suffix('.json').read_text())
 require(hashlib.sha256(kernel).hexdigest() == plan['candidate_sha256'] and
         plan['original_sha256'] in ORIGINAL_KERNELCACHES, 'Unexpected original candidate provenance')
+# The candidate must be of the kernelcache the kernel is prelinked with (unixnu: board.toml [kernel.prelink]), not merely an accepted one.
+pinned = os.environ.get('UNIXNU_KERNELCACHE_SHA256')
+require(not pinned or plan['original_sha256'] == pinned, f'Candidate of original kernelcache {plan["original_sha256"]}, the board pins {pinned}')
 native = np.macho(kernel)
 exports = np.exports(kernel, native)
 by_name = {name: va for va, names in exports.items() for name in names}

@@ -33,6 +33,9 @@ if not p.exists():
     p=later[-1]
 b=p.read_bytes();plan=json.loads(p.with_suffix('.json').read_text());m=macho(b)
 original=ORIGINAL_HID.get(plan['original_sha256'])
+# The candidate must be of the kernelcache the kernel is prelinked with (unixnu: board.toml [kernel.prelink]).
+pinned=os.environ.get('UNIXNU_KERNELCACHE_SHA256')
+require(not pinned or plan['original_sha256']==pinned,f'Reference candidate of the pinned original kernelcache {pinned}')
 require(hashlib.sha256(b).hexdigest()==plan['candidate_sha256'],'Reference candidate matches its plan')
 require(original and (plan['candidate_sha256']==V9_SHA or plan['original_executable_sha256']['com.apple.iokit.IOHIDFamily']==original['text_sha']),
         'Exact original HID reference candidate')

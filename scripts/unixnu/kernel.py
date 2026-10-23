@@ -137,6 +137,11 @@ def build_archives(ctx, env):
             entry = entry['run']
         entries.append(entry)
     env = dict(env, PATH=toolchain_path(env.get('PATH')))
+    # The original kernelcache the kernel is prelinked with ([kernel.prelink] kernelcache_sha256): builders that bind
+    # recorded addresses of its kexts select the record of that kernelcache by it and refuse any other.
+    pinned = ctx.board.get('kernel', {}).get('prelink', {}).get('kernelcache_sha256')
+    if pinned:
+        env['UNIXNU_KERNELCACHE_SHA256'] = pinned.lower()
     for index, entry in enumerate(entries, 1):
         parts = shlex.split(entry)
         script = ctx.tree / 'scripts' / parts[0]

@@ -20,22 +20,36 @@ IOS_DEPLOYMENT = (2, int(IOS_MIN.split('.')[0]) << 16 | int((IOS_MIN.split('.') 
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--objects-dir', type=Path, default=ROOT / 'build/native-aes')
+parser.add_argument('--kernelcache-sha256', default=os.environ.get('UNIXNU_KERNELCACHE_SHA256'),
+                    help='the original kernelcache the kernel is prelinked with (unixnu: board.toml [kernel.prelink])')
 args = parser.parse_args()
 
+# The recorded audit result of each accepted original kernelcache: prelinked addresses (kext slide -0x1000000) of its
+# IOAESAccelerator. 21H461 (iPadOS 17.7.11) and 20H392 (iOS 16.7.16) have the same 181-slot vtable, overrides and
+# 0x120-byte instance at different addresses, so a record binds only the kernelcache it was taken from.
+RECORDED = {
+    'f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7': 'native-aes-original-bindings.S',
+    '2ec297bac95bcba01046fd0148e97e7e5885c05a6c18827f39f534ba375c1221': 'native-aes-original-bindings-20H392.S',
+}
 audit_path = ROOT / 'build/image4-ignition/aes-interface-audit.json'
-recorded = ROOT / 'scripts/data/native-aes-original-bindings.S'
-if not audit_path.is_file() and recorded.is_file():
+if not audit_path.is_file():
     # Without the qualification evidence of the original kernelcache (kernel candidate, KDK annotations, live metadata),
-    # bind with the recorded result of that audit. The addresses belong to the kernelcache pinned in board.toml.
+    # bind with the recorded result of that audit for the kernelcache pinned in board.toml.
+    if args.kernelcache_sha256 not in RECORDED:
+        raise SystemExit(f'No recorded AES bindings for original kernelcache {args.kernelcache_sha256}: pin one of '
+                         f'{", ".join(RECORDED)} in board.toml [kernel.prelink] kernelcache_sha256, or qualify it ({audit_path})')
+    recorded = ROOT / 'scripts/data' / RECORDED[args.kernelcache_sha256]
     out = args.objects_dir
     subprocess.run(['xcrun', 'clang', '-target', IOS_TARGET, '-Werror', '-Wno-incompatible-sysroot', '-c', recorded,
                     '-o', out / 'original-bindings.o'], check=True)
     archive = out / 'libNativeAES.a'
     archive.unlink(missing_ok=True)
     subprocess.run(['xcrun', 'ar', 'rcs', archive, out / 'NativeAES.o', out / 'original-bindings.o'], check=True)
-    print('PASS: native AES bound with the recorded original-kernelcache addresses')
+    print(f'PASS: native AES bound with the recorded original-kernelcache addresses ({recorded.name})')
     raise SystemExit(0)
 audit = json.loads(audit_path.read_text())
+if args.kernelcache_sha256 and audit['original_sha256'] != args.kernelcache_sha256:
+    raise SystemExit(f'The AES interface audit is of original kernelcache {audit["original_sha256"]}, not {args.kernelcache_sha256}')
 obj_path = args.objects_dir / 'NativeAES.o'
 obj = obj_path.read_bytes()
 obj_image = np.macho(obj)
