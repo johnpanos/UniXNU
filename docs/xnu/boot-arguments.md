@@ -2,6 +2,8 @@
 
 The kernel command line comes from `[payload] kernel_args` in the board file. An extra `--kernel-arg NAME=VALUE` replaces the board argument with the same name. The payload step writes the joined line into `unixnu.toml`, and DarwinBoot copies it into `boot_args`.
 
+On xnu-8796 boards, `[payload] board_args` holds arguments that do not fit the 1020-byte line: the ADT tool writes them to `/chosen/board-args` and `PE_parse_boot_argn` reads an argument there when the command line lacks it (`patches/xnu-8796/board-args.patch`). Only arguments parsed after the device tree is set up belong there (drivers, not the first arguments of `arm_init`).
+
 ## Format
 
 An argument matches:

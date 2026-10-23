@@ -95,6 +95,30 @@ def check_args(arguments):
     return line
 
 
+def check_board_args(spec, overridden):
+    """[payload] board_args: kernel arguments the board's ADT tool writes to /chosen/board-args (--board-args), which the kernel
+    reads when the command line lacks them (patches/xnu-8796/board-args.patch). A --kernel-arg of the same name replaces one."""
+    values = spec.get('board_args', [])
+    if not values:
+        return ''
+    if not spec.get('adt'):
+        raise Error('board.toml [payload] board_args needs [payload.adt] (they travel in the device tree)')
+    names = {item.split('=', 1)[0] for item in spec.get('kernel_args', [])}
+    kept = []
+    for value in values:
+        name = str(value).split('=', 1)[0]
+        if name in names:
+            raise Error(f'board.toml [payload]: {name} is in both kernel_args and board_args')
+        if not re.fullmatch(r'[A-Za-z0-9_.\-]+(=[A-Za-z0-9_.,\-]+)?', str(value)):
+            raise Error(f'unsupported board argument: {value}')
+        if name not in overridden:
+            kept.append(str(value))
+    line = ' '.join(kept)
+    if len(line) > 4000:
+        raise Error(f'[payload] board_args are {len(line)} bytes; the limit is 4000')
+    return line
+
+
 def check_native_root(kernel, arguments, adt=None):
     """Refuse the known bare-metal AMFI panic before the volume is written."""
     # An ADT with /defaults vmm-present (the fajita iOS 16 board: [payload.adt] args --vmm-present) makes the 20H392 AMFI skip its
@@ -155,6 +179,7 @@ def build(ctx, kernel=None):
     names = {item.split('=', 1)[0] for item in extra}
     arguments = [item for item in spec.get('kernel_args', []) if item.split('=', 1)[0] not in names] + extra
     line = check_args(arguments)
+    board_args = check_board_args(spec, names)
     check_native_root(kernel, arguments, spec.get('adt'))
     owner_trust = getattr(args, 'owner_trust_cache', None)
     trust = expand(owner_trust or args.trust_cache) if (owner_trust or getattr(args, 'trust_cache', None)) else None
@@ -216,6 +241,9 @@ def build(ctx, kernel=None):
     ipsw_cache = ctx.out_root / 'ipsw' / ctx.board.get('ipsw', {}).get('build', '')
     for value in adt.get('args', []):
         command.append(str(value).replace('{ipsw}', str(ipsw_cache)).replace('{tree}', str(ctx.tree)).replace('{device}', str(ctx.device)))
+    # Board arguments (patches/xnu-8796/board-args.patch) travel in /chosen/board-args, outside the 1020-byte command line.
+    if board_args:
+        command += ['--board-args', board_args]
     # Fixups of signed text (patches/xnu/native-text-fixup.patch) travel in /chosen/text-fixups, outside the 1000-byte command line.
     for fixup in spec.get('text_fixups', []):
         if not re.fullmatch(r'[A-Za-z0-9_.\-]{1,63},[0-9a-fA-F]{1,16},(?:[0-9a-fA-F]{2}){1,16},(?:[0-9a-fA-F]{2}){1,16}', fixup) or len(fixup) >= 160:
@@ -239,7 +267,7 @@ def build(ctx, kernel=None):
         raise Error(f'the payload files take {content >> 20} MiB; raise size_mib (now {size}) in board.toml [payload]')
     write_volume(stage, image, spec.get('volume', 'UNIXNU')[:11], size)
     data_report = {'kernel_sha256': sha256_file(kernel), 'payload_kernel_sha256': sha256_file(payloads / 'kernel.macho'),
-                   'adt_sha256': sha256_file(payloads / 'kernel.macho.adt'), 'kernel_args': line,
+                   'adt_sha256': sha256_file(payloads / 'kernel.macho.adt'), 'kernel_args': line, 'board_args': board_args,
                    'trust_cache_sha256': sha256_file(trust) if trust else None, 'gpu_addon_sha256': sha256_file(addon) if addon else None,
                    'data_ramdisk_sha256': sha256_file(data) if data else None, 'skip_setup': bool(getattr(args, 'skip_setup', False)), 'panic_screen': bool(spec.get('panic_screen')),
                    'payload_sha256': sha256_file(image), 'payload_bytes': image.stat().st_size,

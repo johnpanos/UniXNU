@@ -1,0 +1,64 @@
+Board arguments beyond the command line. DarwinBoot and the kernel's boot_args hold a 1024-byte command line (1020 usable), and
+the fajita iOS 16 board fills it. PE_parse_boot_argn and PE_parse_boot_arg_str now also read /chosen/board-args, a
+NUL-terminated string in the command line's syntax that the payload step writes from [payload] board_args: an argument on the
+command line wins; only one it lacks is looked up there. A device tree without the property changes nothing.
+
+--- a/pexpert/gen/bootargs.c
++++ b/pexpert/gen/bootargs.c
+@@ -187,13 +187,46 @@
+ 	return arg_found;
+ }
+ 
++/*
++ * UniXNU board arguments: /chosen/board-args, a NUL-terminated string in the command line's syntax that the payload step writes
++ * from the board's [payload] board_args. They are the board's defaults beyond the 1020-byte command line: an argument found on
++ * the command line wins, and only one the command line lacks is looked up here. Before the device tree is set up (the first
++ * arguments of arm_init) SecureDTLookupEntry fails and only the command line counts.
++ */
++static char *
++PE_board_args(void)
++{
++	DTEntry chosen;
++	void const *prop = NULL;
++	unsigned int size = 0;
++
++	if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
++	    SecureDTGetProperty(chosen, "board-args", &prop, &size) != kSuccess ||
++	    prop == NULL || size == 0 || ((const char *)prop)[size - 1] != '\0') {
++		return NULL;
++	}
++	return __DECONST(char *, prop);
++}
++
++static boolean_t
++PE_parse_board_argn(const char *arg_string, void *arg_ptr, int max_len, boolean_t force_string)
++{
++	char *board;
++
++	if (PE_parse_boot_argn_internal(PE_boot_args(), arg_string, arg_ptr, max_len, force_string)) {
++		return TRUE;
++	}
++	board = PE_board_args();
++	return board != NULL && PE_parse_boot_argn_internal(board, arg_string, arg_ptr, max_len, force_string);
++}
++
+ boolean_t
+ PE_parse_boot_argn(
+ 	const char      *arg_string,
+ 	void            *arg_ptr,
+ 	int                     max_len)
+ {
+-	return PE_parse_boot_argn_internal(PE_boot_args(), arg_string, arg_ptr, max_len, FALSE);
++	return PE_parse_board_argn(arg_string, arg_ptr, max_len, FALSE);
+ }
+ 
+ boolean_t
+@@ -202,7 +235,7 @@
+ 	char            *arg_ptr,
+ 	int                     strlen)
+ {
+-	return PE_parse_boot_argn_internal(PE_boot_args(), arg_string, arg_ptr, strlen, TRUE);
++	return PE_parse_board_argn(arg_string, arg_ptr, strlen, TRUE);
+ }
+ 
+ #if defined(CONFIG_XNUPOST)

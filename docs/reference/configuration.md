@@ -111,6 +111,7 @@ Types are `s` for string, `x` for hex cells, `i` for decimal cells, `u` for unsi
 | `panic_screen` | boolean | Patch the panic screen into the payload kernel |
 | `trust_cache_sha256` | array | Accepted trust cache hashes. An owner bundle passed with `--owner-trust-cache` skips this list |
 | `kernel_args` | array | Default kernel arguments |
+| `board_args` | array | Kernel arguments beyond the 1020-byte command line, in `/chosen/board-args` (xnu-8796 boards; the ADT tool takes `--board-args`). The command line wins over them |
 | `timeout` | integer | Menu timeout |
 | `skip_setup_tool` | string | Script used by `--skip-setup` |
 
