@@ -1,0 +1,40 @@
+diff --git a/meson.options b/meson.options
+index 8b92a2b..24f4092 100644
+--- a/meson.options
++++ b/meson.options
+@@ -234,6 +234,13 @@ option(
+   description : 'Directory holding NativeAdrenoABI.h for the Turnip darwin kernel backend (freedreno-kmds=darwin)',
+ )
+ 
++option(
++  'tu-darwin-host-include',
++  type : 'string',
++  value : '',
++  description : 'Linux host test of the darwin backend: directory with the IOKit and mach headers of the host harness',
++)
++
+ option(
+   'amdgpu-virtio',
+   type : 'boolean',
+diff --git a/src/freedreno/vulkan/meson.build b/src/freedreno/vulkan/meson.build
+index b544a9f..dffbbbe 100644
+--- a/src/freedreno/vulkan/meson.build
++++ b/src/freedreno/vulkan/meson.build
+@@ -145,9 +145,14 @@ if freedreno_kmds.contains('darwin')
+     tu_flags += '-DTU_BUILTIN_PACK_HEADER="' + get_option('tu-builtin-pack-header') + '"'
+   endif
+   libtu_includes += include_directories(get_option('tu-darwin-abi-dir'), is_system : false)
+-  tu_deps += dependency('appleframeworks', modules : ['IOKit', 'CoreGraphics', 'Foundation', 'QuartzCore'])
+-  # The wsi layer's device entrypoint table references weak symbols that nothing defines; ld64 needs them allowed.
+-  tu_link_args += ['-Wl,-undefined,dynamic_lookup']
++  if host_machine.system() == 'darwin'
++    tu_deps += dependency('appleframeworks', modules : ['IOKit', 'CoreGraphics', 'Foundation', 'QuartzCore'])
++    # The wsi layer's device entrypoint table references weak symbols that nothing defines; ld64 needs them allowed.
++    tu_link_args += ['-Wl,-undefined,dynamic_lookup']
++  else
++    # Linux host test only: IOKit/IOKitLib.h and mach/mach.h come from the host harness, whose shim library answers the calls.
++    libtu_includes += include_directories(get_option('tu-darwin-host-include'), is_system : true)
++  endif
+ endif
+ 
+ if freedreno_kmds.contains('msm')
