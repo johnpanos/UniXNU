@@ -70,7 +70,9 @@ manifest.write_text('\n'.join([
     # The runtime hashes every shader-cache key and entry; without asm, sha2 0.10 on aarch64 is the portable software rounds, not the
     # ARMv8 SHA-256 instructions every target CPU has (cpufeatures answers sha2 true on Apple platforms).
     'sha2 = { version = "0.10", features = ["asm"] }',
-    '[profile.release]', 'panic = "unwind"', 'debug = 1', '',
+    '[profile.release]', 'panic = "unwind"', 'debug = 1',
+    # NMB_LTO=1: the release bridge with fat LTO and one codegen unit (slower build, cross-crate inlining of metal2vulkan into the bridge).
+    *(['lto = "fat"', 'codegen-units = 1'] if os.environ.get('NMB_LTO') == '1' else []), '',
 ]))
 if args.manifest_only:
     print(manifest)

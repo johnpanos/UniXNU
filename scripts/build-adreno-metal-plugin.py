@@ -23,6 +23,12 @@ sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'],
 IOS_TARGET = os.environ.get('UNIXNU_IOS_TARGET', '17.0')   # 16.0 for fajita's iOS 16.7.16
 base = ['xcrun', 'clang', '-target', 'arm64-apple-ios' + IOS_TARGET, '-isysroot', sdk, '-O2', '-g', '-Wall', '-Wextra', '-Werror',
         '-fstack-protector-strong']
+# NGPU_PLUGIN_NDEBUG=1: the release plugin, with assert() compiled out (NDEBUG) in the plugin and frontend sources.
+if os.environ.get('NGPU_PLUGIN_NDEBUG') == '1':
+    base.append('-DNDEBUG')
+# NGPU_PLUGIN_OPT=-O3 (or -Os): the plugin's optimization level instead of -O2.
+if os.environ.get('NGPU_PLUGIN_OPT'):
+    base[base.index('-O2')] = os.environ['NGPU_PLUGIN_OPT']
 VULKAN_INCLUDE = ROOT / '.cache/mesa-work/include'
 TURNIP = ROOT / 'build/mesa-tu-ios/src/freedreno/vulkan/libvulkan_freedreno.dylib'
 if not TURNIP.is_file():
