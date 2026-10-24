@@ -61,12 +61,13 @@ for name in ['NativeAdrenoMemory', 'NativeAdrenoSmmuMemory', 'NativeAdrenoVm', '
     obj = out / (name + '.o')
     source = kit / (name + '.cpp')
     text = source.read_text()
-    if platform.machine() not in ('aarch64', 'arm64') and 'dsb sy' in text:
-        # The kernel code's AArch64 barriers (submit, write-combine pool): a host full fence stands in on x86. The copy stays in
+    barrier = re.compile(r'__asm__ volatile\("d[sm]b [a-z]+":::"memory"\)')
+    if platform.machine() not in ('aarch64', 'arm64') and barrier.search(text):
+        # The kernel code's AArch64 barriers (dsb/dmb: submit, write-combine pool): a host full fence stands in on x86. The copy stays in
         # build/, beside the kernel's own include directory so its includes resolve the same way.
         source = out / 'portable' / (name + '.cpp')
         source.parent.mkdir(exist_ok=True)
-        source.write_text(text.replace('__asm__ volatile("dsb sy":::"memory")', '__atomic_thread_fence(__ATOMIC_SEQ_CST)'))
+        source.write_text(barrier.sub('__atomic_thread_fence(__ATOMIC_SEQ_CST)', text))
     run([CXX, *kernel_flags, '-c', source, '-o', obj])
     core.append(obj)
 shim_obj = out / 'host_iokit_shim_linux.o'
