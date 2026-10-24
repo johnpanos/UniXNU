@@ -1,8 +1,7 @@
 diff --git a/src/freedreno/ir3/ir3_nir.c b/src/freedreno/ir3/ir3_nir.c
-index c7430bd..22971a0 100644
 --- a/src/freedreno/ir3/ir3_nir.c
 +++ b/src/freedreno/ir3/ir3_nir.c
-@@ -696,6 +696,29 @@ ir3_nir_min_lod_workaround(nir_shader *shader)
+@@ -696,6 +696,30 @@
        nir_metadata_control_flow, NULL);
  }
  
@@ -26,19 +25,47 @@ index c7430bd..22971a0 100644
 +   for (unsigned i = 0; i < alu->def.num_components; i++)
 +      swz[i] = alu->src[0].swizzle[i];
 +   nir_def_replace(&alu->def, nir_swizzle(b, wide, swz, alu->def.num_components));
++   (*(unsigned *)data)++;
 +   return true;
 +}
 +
  void
  ir3_finalize_nir(struct ir3_compiler *compiler,
                   const struct ir3_shader_nir_options *options,
-@@ -724,6 +747,9 @@ ir3_finalize_nir(struct ir3_compiler *compiler,
+@@ -724,6 +748,13 @@
        mesa_logi("----------------------");
     }
  
-+   if (debug_get_bool_option("IR3_RELAX_HALF", false))
-+      NIR_PASS(_, s, nir_shader_alu_pass, ir3_relax_half_round_trip_instr, nir_metadata_control_flow, NULL);
++   if (debug_get_bool_option("IR3_RELAX_HALF", false)) {
++      unsigned folds = 0;
++      NIR_PASS(_, s, nir_shader_alu_pass, ir3_relax_half_round_trip_instr, nir_metadata_control_flow, &folds);
++      if (debug_get_bool_option("IR3_STATS", false))
++         mesa_logi("ir3-relax: %u round trips folded (stage %d)", folds, s->info.stage);
++   }
 +
     /* For vertex inputs, we expect them to all be at the top. FS inputs are also
      * more optimal at the top.
      */
+diff --git a/src/freedreno/ir3/ir3_shader.c b/src/freedreno/ir3/ir3_shader.c
+--- a/src/freedreno/ir3/ir3_shader.c
++++ b/src/freedreno/ir3/ir3_shader.c
+@@ -630,6 +630,19 @@
+ 
+    if (needs_binning_variant(v) && !compile_variant(shader, v->binning))
+       goto fail;
++
++   /* IR3_STATS=1 (fajita): one line per compiled variant, for finding the expensive shaders without full disassembly. */
++   if (debug_get_bool_option("IR3_STATS", false)) {
++      const struct ir3_info *i = &v->info;
++      const uint8_t *h = (const uint8_t *)shader->nir->info.source_blake3;
++      mesa_logi("ir3-stats: stage %d src %02x%02x%02x%02x instrs %u nops %u mov %u cov %u cat0-7 %u %u %u %u %u %u %u %u "
++                "maxreg %d half %d waves %d ss %u sy %u sstall %u loops %u",
++                v->type, h[0], h[1], h[2], h[3], i->instrs_count, i->nops_count, i->mov_count, i->cov_count,
++                i->instrs_per_cat[0], i->instrs_per_cat[1], i->instrs_per_cat[2], i->instrs_per_cat[3], i->instrs_per_cat[4],
++                i->instrs_per_cat[5], i->instrs_per_cat[6], i->instrs_per_cat[7], i->max_reg, i->max_half_reg, i->max_waves,
++                i->ss, i->sy, i->sstall, i->loops);
++   }
++
+    ir3_disk_cache_store(shader, v);
+ 
+    return v;
