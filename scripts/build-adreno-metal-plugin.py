@@ -44,11 +44,27 @@ exe = bundle / 'NativeAdrenoMetal'
 # render server's sandbox may refuse to read the list file beside the bundle, and the plugin then primes from this copy (PrimeShaders.h).
 PRIME_LIST = ROOT / 'build/prime-list.txt'
 prime_section = [f'-Wl,-sectcreate,__DATA,__primelist,{PRIME_LIST}'] if PRIME_LIST.is_file() else []
+# The GPU hand-off's scaling kernel for a logical display (drivers/NativeMetal/shaders/scanout_scale.metal), as a metallib in __DATA,__scalelib
+# (GpuScanoutPresenter.h). Without the Metal toolchain the plugin is built without it and refuses frames that need scaling; UNIXNU_SCALELIB=1
+# makes that an error.
+SCALE_SRC = ROOT / 'drivers/NativeMetal/shaders/scanout_scale.metal'
+SCALE_LIB = OUT / 'scanout_scale.metallib'
+scale_section = []
+try:
+    air = OUT / 'scanout_scale.air'
+    subprocess.run(['xcrun', '-sdk', 'iphoneos', 'metal', '-std=metal3.0', '-mios-version-min=' + IOS_TARGET, '-O2', '-c', SCALE_SRC, '-o', air],
+                   check=True)
+    subprocess.run(['xcrun', '-sdk', 'iphoneos', 'metallib', air, '-o', SCALE_LIB], check=True)
+    scale_section = [f'-Wl,-sectcreate,__DATA,__scalelib,{SCALE_LIB}']
+except (subprocess.CalledProcessError, FileNotFoundError) as error:
+    if os.environ.get('UNIXNU_SCALELIB') == '1':
+        raise
+    print(f'warning: no scanout scaling metallib ({error}); logical-display frames stay on the CPU copy')
 subprocess.run([*(['xcrun', 'clang++'] + base[2:]), '-std=c++17', '-fobjc-arc', '-Wno-deprecated-declarations', '-bundle',
                 '-I', ROOT / 'drivers/NativeAdreno', '-I', ROOT / 'kits/AdrenoPM4', '-I', VULKAN_INCLUDE, '-I', ROOT / 'build/turnip-smoke',
                 '-x', 'objective-c++', ROOT / 'drivers/NativeMetal/NativeAdrenoMetalPlugin.mm',
                 ROOT / 'drivers/NativeMetal/NativeBridgeMetalFrontend.mm', '-x', 'none', pm4, BRIDGE,
-                '-Wl,-dead_strip', *prime_section, '-lobjc', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOSurface', '-o', exe],
+                '-Wl,-dead_strip', *prime_section, *scale_section, '-lobjc', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOSurface', '-o', exe],
                check=True)
 subprocess.run(['strip', '-x', exe], check=True)
 # The linker writes the debug symbols of the Rust bridge next to the executable; keep them beside the bundle, not in the image.
