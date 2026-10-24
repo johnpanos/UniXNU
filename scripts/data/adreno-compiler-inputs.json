@@ -53,6 +53,7 @@
     "patches/mesa/turnip-graphics-cache-feedback.patch",
     "patches/mesa/turnip-empty-scissor.patch",
     "patches/mesa/turnip-builtin-shader-pack.patch",
+    "patches/mesa/turnip-host-import-images.patch",
     "patches/mesa/turnip-darwin-linux-host.patch"
   ],
   "integer_fma_reference": {
