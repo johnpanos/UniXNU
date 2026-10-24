@@ -47,7 +47,8 @@ setup = [ROOT / '.cache/mesa-venv/bin/meson', 'setup', OUT, SOURCE, '--wrap-mode
 if args.target == 'ios':
     sdk = read(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'])
     find = lambda tool: read(['xcrun', '--sdk', 'iphoneos', '--find', tool])
-    flags = ['-target', 'arm64-apple-ios17.0', '-isysroot', sdk, '-fstack-protector-strong']
+    # UNIXNU_IOS_TARGET: the deployment target (17.0 for the iPadOS 17 boards, 16.0 for fajita's iOS 16.7.16).
+    flags = ['-target', 'arm64-apple-ios' + os.environ.get('UNIXNU_IOS_TARGET', '17.0'), '-isysroot', sdk, '-fstack-protector-strong']
     cross = ROOT / 'build/mesa-tu-ios.cross'
     cross.parent.mkdir(exist_ok=True)
     cross.write_text(

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the native Metal bridge (drivers/NativeMetal/bridge/NativeMetalBridge.rs): the pinned metal2vulkan runtime behind a C ABI, as a static library.
 
---target ios (default) cross-builds for arm64-apple-ios17.0, --target host for the macOS host simulation. The runtime's own example library
+--target ios (default) cross-builds for arm64-apple-ios17.0 (UNIXNU_IOS_TARGET overrides the version), --target host for the macOS host simulation. The runtime's own example library
 (runtime_examples.ll) and its function-constant fixture are assembled to AIR with llvm-as and embedded for the self-tests. Only generated build files hold local paths; nothing here
 is committed. Output: build/native-metal-bridge/<target>/libnative_metal_bridge.a"""
 import argparse
@@ -69,7 +69,7 @@ manifest.write_text('\n'.join([
     '[profile.release]', 'panic = "unwind"', 'debug = 1', '',
 ]))
 triple = 'aarch64-apple-ios' if args.target == 'ios' else 'aarch64-apple-darwin'
-env = dict(os.environ, NMB_FIXTURE_AIR=str(air), NMB_FC_AIR=str(fc_air), IPHONEOS_DEPLOYMENT_TARGET='17.0', MACOSX_DEPLOYMENT_TARGET='14.0')
+env = dict(os.environ, NMB_FIXTURE_AIR=str(air), NMB_FC_AIR=str(fc_air), IPHONEOS_DEPLOYMENT_TARGET=os.environ.get('UNIXNU_IOS_TARGET', '17.0'), MACOSX_DEPLOYMENT_TARGET='14.0')
 target_dir = ROOT / 'build/m2v-target'
 log = out / ('build-%s.log' % args.target)
 with log.open('w') as stream:

@@ -6,6 +6,7 @@ Output (ignored, never committed): build/adreno-metal-plugin/NativeAdrenoMetal.b
 trust.json with its CDHash. The bundle is staged into the Data seed by add-gpu-plugin-data.py and trusted through an extra
 owner trust module (make-owner-trust-bundle.py); neither changes the original trust modules, AMFI or any Apple signature."""
 import json
+import os
 import plistlib
 import re
 import shutil
@@ -19,15 +20,21 @@ if OUT.exists():
     shutil.rmtree(OUT)
 bundle.mkdir(parents=True)
 sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
-base = ['xcrun', 'clang', '-target', 'arm64-apple-ios17.0', '-isysroot', sdk, '-O2', '-g', '-Wall', '-Wextra', '-Werror',
+IOS_TARGET = os.environ.get('UNIXNU_IOS_TARGET', '17.0')   # 16.0 for fajita's iOS 16.7.16
+base = ['xcrun', 'clang', '-target', 'arm64-apple-ios' + IOS_TARGET, '-isysroot', sdk, '-O2', '-g', '-Wall', '-Wextra', '-Werror',
         '-fstack-protector-strong']
 VULKAN_INCLUDE = ROOT / '.cache/mesa-work/include'
 TURNIP = ROOT / 'build/mesa-tu-ios/src/freedreno/vulkan/libvulkan_freedreno.dylib'
 if not TURNIP.is_file():
     raise SystemExit('Build Turnip first: python3 scripts/build-turnip-darwin.py --target ios')
 subprocess.run(['python3', ROOT / 'scripts/gen-turnip-smoke-shaders.py'], check=True)
-# Turnip's first submission, recorded on the host, for the plugin's prefix replay (build/turnip-smoke/TurnipReplay.h).
-subprocess.run(['python3', ROOT / 'scripts/gen-turnip-replay.py'], check=True)
+# Turnip's first submission, recorded on the host, for the plugin's prefix replay (build/turnip-smoke/TurnipReplay.h). The recording is an
+# A740 one; UNIXNU_TURNIP_REPLAY=0 (fajita's A630) builds the plugin without it (NativeAdrenoUserTest.h includes it only when present).
+replay = ROOT / 'build/turnip-smoke/TurnipReplay.h'
+if os.environ.get('UNIXNU_TURNIP_REPLAY', '1') == '0':
+    replay.unlink(missing_ok=True)
+else:
+    subprocess.run(['python3', ROOT / 'scripts/gen-turnip-replay.py'], check=True)
 subprocess.run(['python3', ROOT / 'scripts/build-native-metal-bridge.py', '--target', 'ios'], check=True)
 BRIDGE = ROOT / 'build/native-metal-bridge/ios/libnative_metal_bridge.a'
 pm4 = OUT / 'AdrenoPM4.o'
@@ -56,7 +63,7 @@ assert re.search(r'^Page size=4096$', turnip_detail, re.M)
 (bundle / 'Info.plist').write_bytes(plistlib.dumps(dict(
     CFBundleIdentifier='org.blu-sharky.NativeAdrenoMetal', CFBundleExecutable='NativeAdrenoMetal', CFBundlePackageType='BNDL',
     CFBundleVersion='1', CFBundleShortVersionString='1', NSPrincipalClass='NativeAdrenoMetalDevice',
-    MinimumOSVersion='17.0'), fmt=plistlib.FMT_XML))
+    MinimumOSVersion=IOS_TARGET), fmt=plistlib.FMT_XML))
 subprocess.run(['codesign', '--force', '--sign', '-', '--pagesize', '4096', '--identifier', 'org.blu-sharky.NativeAdrenoMetal',
                 bundle], check=True)
 subprocess.run(['codesign', '--verify', '--strict', bundle], check=True)
