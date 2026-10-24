@@ -1,0 +1,44 @@
+diff --git a/src/freedreno/ir3/ir3_nir.c b/src/freedreno/ir3/ir3_nir.c
+index c7430bd..22971a0 100644
+--- a/src/freedreno/ir3/ir3_nir.c
++++ b/src/freedreno/ir3/ir3_nir.c
+@@ -696,6 +696,29 @@ ir3_nir_min_lod_workaround(nir_shader *shader)
+       nir_metadata_control_flow, NULL);
+ }
+ 
++
++/* IR3_RELAX_HALF=1 (fajita): a 32-bit float rounded to 16 bits and widened again, f2f32(f2f16(x)), is x. Translators that emulate a
++ * 16-bit type's rounding in 32-bit arithmetic (metal2vulkan's "converted" half rounding after every half + - * fma) pay two cov
++ * instructions per operation for it; the relaxation keeps the 32-bit value (at least as precise as the 16-bit result). Off by default.
++ */
++static bool
++ir3_relax_half_round_trip_instr(nir_builder *b, nir_alu_instr *alu, void *data)
++{
++   if (alu->op != nir_op_f2f32 || alu->def.bit_size != 32)
++      return false;
++   nir_alu_instr *narrow = nir_src_as_alu(alu->src[0].src);
++   if (!narrow || (narrow->op != nir_op_f2f16 && narrow->op != nir_op_f2f16_rtne) ||
++       nir_src_bit_size(narrow->src[0].src) != 32)
++      return false;
++   b->cursor = nir_before_instr(&alu->instr);
++   nir_def *wide = nir_mov_alu(b, narrow->src[0], alu->def.num_components);
++   unsigned swz[NIR_MAX_VEC_COMPONENTS];
++   for (unsigned i = 0; i < alu->def.num_components; i++)
++      swz[i] = alu->src[0].swizzle[i];
++   nir_def_replace(&alu->def, nir_swizzle(b, wide, swz, alu->def.num_components));
++   return true;
++}
++
+ void
+ ir3_finalize_nir(struct ir3_compiler *compiler,
+                  const struct ir3_shader_nir_options *options,
+@@ -724,6 +747,9 @@ ir3_finalize_nir(struct ir3_compiler *compiler,
+       mesa_logi("----------------------");
+    }
+ 
++   if (debug_get_bool_option("IR3_RELAX_HALF", false))
++      NIR_PASS(_, s, nir_shader_alu_pass, ir3_relax_half_round_trip_instr, nir_metadata_control_flow, NULL);
++
+    /* For vertex inputs, we expect them to all be at the top. FS inputs are also
+     * more optimal at the top.
+     */
