@@ -49,11 +49,10 @@ diff --git a/src/freedreno/ir3/ir3_nir.c b/src/freedreno/ir3/ir3_nir.c
 diff --git a/src/freedreno/ir3/ir3_shader.c b/src/freedreno/ir3/ir3_shader.c
 --- a/src/freedreno/ir3/ir3_shader.c
 +++ b/src/freedreno/ir3/ir3_shader.c
-@@ -630,6 +630,19 @@
- 
+@@ -631,6 +631,18 @@
     if (needs_binning_variant(v) && !compile_variant(shader, v->binning))
        goto fail;
-+
+ 
 +   /* IR3_STATS=1 (fajita): one line per compiled variant, for finding the expensive shaders without full disassembly. */
 +   if (debug_get_bool_option("IR3_STATS", false)) {
 +      const struct ir3_info *i = &v->info;
