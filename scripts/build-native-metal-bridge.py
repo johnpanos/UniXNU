@@ -23,9 +23,11 @@ parser.add_argument('--manifest-only', action='store_true',
 args = parser.parse_args()
 if subprocess.check_output(['git', '-C', str(SOURCE), 'rev-parse', 'HEAD'], text=True).strip() != PIN:
     raise SystemExit('Translator revision differs from the qualified source pin')
-# The translator pin (johnpanos/metal2vulkan fajita-upstream) carries NativeMetal's bridge patches already (0001, 0002, 0004-0007 on
-# upstream a2c440b); the patch files stay for the record.
-PATCHES = []
+PATCHES = [ROOT / 'drivers/NativeMetal/bridge/patches' / name for name in [
+    '0001-optional-constant-output-members.patch', '0002-resource-wait-storage-dependencies.patch',
+    '0003-cache-device-entry-point-priming.patch', '0004-fold-constant-global-field-loads.patch',
+    '0005-keep-module-decodes-and-profile-fingerprints.patch', '0006-skip-draws-without-a-pipeline.patch',
+    '0007-accept-two-plane-rgb-surfaces.patch']]   # upstream lists 0008-alias-padded-rows-of-written-textures.patch, which NativeMetal does not carry yet
 tree_diff = subprocess.check_output(['git', '-C', str(SOURCE), 'diff', 'HEAD', '--'], text=True)
 def canonical_diff(diff):
     # Independent patches touch disjoint files; Git orders the combined diff by
