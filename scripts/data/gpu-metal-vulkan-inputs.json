@@ -11,7 +11,7 @@
   },
   "translator": {
     "repository": "https://github.com/johnpanos/metal2vulkan",
-    "commit": "d7fc761ca0ebaf4ceb82e922d9220f3e3c62f703",
+    "commit": "ef9320403a59529e7b5acf134d2054303497b818",
     "clone": "depth 1, blob filter, checked out source",
     "files": {
       "README.md": "e603d5c9f6b736e1f468e06e062299eff2cbb3b799718a24518dad4733ad4318",
