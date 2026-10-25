@@ -66,6 +66,8 @@ subprocess.run([*(['xcrun', 'clang++'] + base[2:]), '-std=c++17', '-fobjc-arc', 
                 ROOT / 'drivers/NativeMetal/NativeBridgeMetalFrontend.mm', '-x', 'none', pm4, BRIDGE,
                 '-Wl,-dead_strip', *prime_section, *scale_section, '-lobjc', '-framework', 'Foundation', '-framework', 'Metal', '-framework', 'IOSurface', '-o', exe],
                check=True)
+# The unstripped image stays beside the bundle for symbolizing device-side offsets (strip -x moves no section: offsets match).
+shutil.copyfile(exe, OUT / 'NativeAdrenoMetal.unstripped')
 subprocess.run(['strip', '-x', exe], check=True)
 # The linker writes the debug symbols of the Rust bridge next to the executable; keep them beside the bundle, not in the image.
 symbols = OUT / 'NativeAdrenoMetal.dSYM'
@@ -76,6 +78,7 @@ if (bundle / 'NativeAdrenoMetal.dSYM').exists():
 # CDHash can be trusted like the plugin's. It is signed before the bundle so the bundle's resource seal covers the final bytes.
 turnip_lib = bundle / 'libvulkan_freedreno.dylib'
 shutil.copyfile(TURNIP, turnip_lib)
+shutil.copyfile(TURNIP, OUT / 'libvulkan_freedreno.unstripped')
 subprocess.run(['strip', '-x', turnip_lib], check=True)
 subprocess.run(['codesign', '--force', '--sign', '-', '--pagesize', '4096', '--identifier', 'org.blu-sharky.turnip', turnip_lib], check=True)
 turnip_detail = subprocess.run(['codesign', '--display', '--verbose=4', turnip_lib], capture_output=True, text=True, check=True).stderr
