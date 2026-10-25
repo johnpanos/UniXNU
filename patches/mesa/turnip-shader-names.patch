@@ -1,0 +1,16 @@
+diff --git a/src/freedreno/vulkan/tu_shader.cc b/src/freedreno/vulkan/tu_shader.cc
+index d99d55c..e48beb9 100644
+--- a/src/freedreno/vulkan/tu_shader.cc
++++ b/src/freedreno/vulkan/tu_shader.cc
+@@ -212,6 +212,11 @@ tu_spirv_to_nir(struct tu_device *dev,
+    if (result != VK_SUCCESS)
+       return NULL;
+ 
++   /* The stage's entry point names the shader (the Metal function's name, from metal2vulkan), so IR3_SHADER_DEBUG's disassembly and
++    * the per-draw pass trace's hashes can be told apart by function. */
++   if (!nir->info.name && stage_info->pName)
++      nir->info.name = ralloc_strdup(nir, stage_info->pName);
++
+    /* ir3 uses num_ubos and num_ssbos to track the number of *bindful*
+     * UBOs/SSBOs, but spirv_to_nir sets them to the total number of objects
+     * which is useless for us, so reset them here.
