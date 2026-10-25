@@ -268,10 +268,10 @@ index 4c2bf6a..a8ccd76 100644
  VkResult tu_knl_drm_msm_load(struct tu_instance *instance,
 diff --git a/src/freedreno/vulkan/tu_knl_darwin.cc b/src/freedreno/vulkan/tu_knl_darwin.cc
 new file mode 100644
-index 0000000..b03c6ee
+index 0000000..776640a
 --- /dev/null
 +++ b/src/freedreno/vulkan/tu_knl_darwin.cc
-@@ -0,0 +1,1110 @@
+@@ -0,0 +1,1132 @@
 +/*
 + * Native Darwin kernel backend for Turnip: talks to the NativeAdreno IOKit user client (NativeAdrenoABI.h, version 1).
 + * Modelled on tu_knl_kgsl.cc (no libdrm) and tu_knl_drm_msm.cc (the client chooses GPU addresses).
@@ -360,6 +360,28 @@ index 0000000..b03c6ee
 +      memcpy(buffer + sizeof(header), in, in_size);
 +   return IOConnectCallStructMethod(dw.conn, dw.selector, buffer, sizeof(header) + in_size, out_size ? out : NULL,
 +                                    out_size ? &out_bytes : NULL);
++}
++
++/* For NativeMetal (found with dlsym): whether the CPU wrote any page of each of `count` (<= 16) ranges {address, bytes} of this process
++ * since the last query, as bit i of *dirty (NativeAdrenoMethodHostDirty; only pages an import pinned are tracked, any other range
++ * reads as written). Returns 0, or the kernel's error (an older kernel: unsupported), with *dirty all ones. */
++extern "C" __attribute__((visibility("default"))) int
++tu_darwin_host_dirty(const uint64_t *ranges, uint32_t count, uint32_t *dirty);
++extern "C" __attribute__((visibility("default"))) int
++tu_darwin_host_dirty(const uint64_t *ranges, uint32_t count, uint32_t *dirty)
++{
++   static_assert(sizeof(NativeAdrenoAbiHostDirty) <= sizeof(NativeAdrenoAbiSubmit), "the tunnel buffer holds the request");
++   *dirty = ~0u;
++   if (!dw.conn || count > NativeAdrenoAbiDirtyRanges)
++      return kIOReturnNotReady;
++   NativeAdrenoAbiHostDirty request = {};
++   request.count = count;
++   memcpy(request.ranges, ranges, count * 2 * sizeof(uint64_t));
++   NativeAdrenoAbiHostDirtyReply reply = {};
++   kern_return_t kr = dw_call(NativeAdrenoMethodHostDirty, &request, sizeof(request), &reply, sizeof(reply));
++   if (kr == KERN_SUCCESS)
++      *dirty = reply.dirty;
++   return kr;
 +}
 +
 +/* Finds an admitted selector: the driver answers a tunnel probe (method 0xffffffff) with success for every selector the sandbox lets through. */
