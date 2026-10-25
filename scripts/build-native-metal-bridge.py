@@ -70,7 +70,9 @@ manifest.write_text('\n'.join([
     # The runtime hashes every shader-cache key and entry; without asm, sha2 0.10 on aarch64 is the portable software rounds, not the
     # ARMv8 SHA-256 instructions every target CPU has (cpufeatures answers sha2 true on Apple platforms).
     'sha2 = { version = "0.10", features = ["asm"] }',
-    '[profile.release]', 'panic = "unwind"', 'debug = 1', '',
+    # One codegen unit with fat LTO: the render server's encode is the translator's per-draw CPU work (fajita CPU profile, 2026-10-24),
+    # spread over many small functions across the crates; inlining across them is where the time is.
+    '[profile.release]', 'panic = "unwind"', 'debug = 1', 'lto = "fat"', 'codegen-units = 1', '',
 ]))
 if args.manifest_only:
     print(manifest)
@@ -79,7 +81,12 @@ triple = 'aarch64-apple-ios' if args.target == 'ios' else 'aarch64-apple-darwin'
 # The translator source the runtime is built from (its pin and recorded patches), which keys the shader cache: shader priming keeps what it
 # finished while this stays the same (PrimeShaders.h).
 runtime_id = hashlib.sha256((PIN + '\n' + canonical_diff(expected)).encode()).hexdigest()[:32]
-env = dict(os.environ, NMB_RUNTIME_ID=runtime_id, NMB_FIXTURE_AIR=str(air), NMB_FC_AIR=str(fc_air), IPHONEOS_DEPLOYMENT_TARGET=os.environ.get('UNIXNU_IOS_TARGET', '17.0'), MACOSX_DEPLOYMENT_TARGET='14.0')
+# NMB_TARGET_CPU (a board's CPU, e.g. cortex-a75 for fajita's Kryo 385: ARMv8.2 with LSE atomics, which Arc and Mutex use on every
+# draw) tunes the bridge for it; without it the target's default CPU.
+rustflags = os.environ.get('RUSTFLAGS', '')
+if os.environ.get('NMB_TARGET_CPU'):
+    rustflags = (rustflags + ' -C target-cpu=' + os.environ['NMB_TARGET_CPU']).strip()
+env = dict(os.environ, RUSTFLAGS=rustflags, NMB_RUNTIME_ID=runtime_id, NMB_FIXTURE_AIR=str(air), NMB_FC_AIR=str(fc_air), IPHONEOS_DEPLOYMENT_TARGET=os.environ.get('UNIXNU_IOS_TARGET', '17.0'), MACOSX_DEPLOYMENT_TARGET='14.0')
 target_dir = ROOT / 'build/m2v-target'
 log = out / ('build-%s.log' % args.target)
 with log.open('w') as stream:
