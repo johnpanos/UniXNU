@@ -1,14 +1,16 @@
 diff --git a/src/freedreno/vulkan/tu_cmd_buffer.cc b/src/freedreno/vulkan/tu_cmd_buffer.cc
-index 60ad3a8..db8ae93 100644
+index 60ad3a8..9bd9fbc 100644
 --- a/src/freedreno/vulkan/tu_cmd_buffer.cc
 +++ b/src/freedreno/vulkan/tu_cmd_buffer.cc
-@@ -4138,6 +4138,9 @@ tu_create_cmd_buffer(struct vk_command_pool *pool,
+@@ -4138,6 +4138,11 @@ tu_create_cmd_buffer(struct vk_command_pool *pool,
     tu_cs_init(&cmd_buffer->sub_cs, device, TU_CS_MODE_SUB_STREAM, 2048, "draw sub cs");
     tu_cs_init(&cmd_buffer->pre_chain.draw_cs, device, TU_CS_MODE_GROW, 4096, "prechain draw cs");
     tu_cs_init(&cmd_buffer->pre_chain.draw_epilogue_cs, device, TU_CS_MODE_GROW, 4096, "prechain draw epiligoue cs");
-+   cmd_buffer->cs.recycle = cmd_buffer->draw_cs.recycle = cmd_buffer->tile_store_cs.recycle = true;
-+   cmd_buffer->draw_epilogue_cs.recycle = cmd_buffer->sub_cs.recycle = true;
-+   cmd_buffer->pre_chain.draw_cs.recycle = cmd_buffer->pre_chain.draw_epilogue_cs.recycle = true;
++   /* TU_CS_RECYCLE=0 turns the command-stream BO cache off (tu_cs.cc), for an A/B. */
++   static const bool recycle = debug_get_bool_option("TU_CS_RECYCLE", true);
++   cmd_buffer->cs.recycle = cmd_buffer->draw_cs.recycle = cmd_buffer->tile_store_cs.recycle = recycle;
++   cmd_buffer->draw_epilogue_cs.recycle = cmd_buffer->sub_cs.recycle = recycle;
++   cmd_buffer->pre_chain.draw_cs.recycle = cmd_buffer->pre_chain.draw_epilogue_cs.recycle = recycle;
  
     for (unsigned i = 0; i < MAX_BIND_POINTS; i++)
        cmd_buffer->descriptors[i].push_set.base.type = VK_OBJECT_TYPE_DESCRIPTOR_SET;
