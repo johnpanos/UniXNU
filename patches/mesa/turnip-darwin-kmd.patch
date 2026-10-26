@@ -268,10 +268,10 @@ index 4c2bf6a..a8ccd76 100644
  VkResult tu_knl_drm_msm_load(struct tu_instance *instance,
 diff --git a/src/freedreno/vulkan/tu_knl_darwin.cc b/src/freedreno/vulkan/tu_knl_darwin.cc
 new file mode 100644
-index 0000000..4a2a59b
+index 0000000..e52eee3
 --- /dev/null
 +++ b/src/freedreno/vulkan/tu_knl_darwin.cc
-@@ -0,0 +1,1137 @@
+@@ -0,0 +1,1156 @@
 +/*
 + * Native Darwin kernel backend for Turnip: talks to the NativeAdreno IOKit user client (NativeAdrenoABI.h, version 1).
 + * Modelled on tu_knl_kgsl.cc (no libdrm) and tu_knl_drm_msm.cc (the client chooses GPU addresses).
@@ -312,9 +312,9 @@ index 0000000..4a2a59b
 +   io_connect_t conn;
 +   bool open;
 +   pthread_mutex_t lock;
-+   /* Fences of the submissions still possibly in flight, oldest first (the kernel keeps at most eight jobs). */
-+   uint32_t inflight[8];
-+   unsigned inflight_count;
++   /* Submissions that found the kernel's shared job slots (eight, for every client of the one ring) or its ring full: how many waited,
++    * and the longest wait (see darwin_submit_chunk). */
++   uint64_t slot_waits, slot_wait_max_ns;
 +   /* Transport. On the tablet a sandboxed process (the Metal plugin inside SpringBoard) reaches the driver through the AGX accelerator
 +    * service with open type 0x4147, and the sandbox profile decides which external-method selector numbers are admitted, so every ABI
 +    * method travels as {magic, method, payload} through one admitted selector (the same tunnel the plugin's own test uses). Direct
@@ -446,7 +446,6 @@ index 0000000..4a2a59b
 +                               "NativeAdreno query failed: 0x%x", kr);
 +   }
 +   dw.open = true;
-+   dw.inflight_count = 0;
 +   dw.last_fence = 0;
 +   return VK_SUCCESS;
 +}
@@ -461,6 +460,10 @@ index 0000000..4a2a59b
 +   }
 +}
 +
++/* vk_device_set_lost, with the reason also in the Mesa log (MESA_LOG_FILE): a release build gives vk_device_set_lost's text only to
++ * debug-utils messengers. */
++#define darwin_lost(dev, ...) (mesa_loge("NativeAdreno: device lost: " __VA_ARGS__), vk_device_set_lost(&(dev)->vk, __VA_ARGS__))
++
 +static VkResult
 +dw_status_to_vk(struct tu_device *dev, kern_return_t kr, const char *what)
 +{
@@ -468,7 +471,7 @@ index 0000000..4a2a59b
 +      return VK_SUCCESS;
 +   if (kr == kIOReturnTimeout)
 +      return VK_TIMEOUT;
-+   return vk_device_set_lost(&dev->vk, "%s failed: 0x%x", what, kr);
++   return darwin_lost(dev, "%s failed: 0x%x", what, kr);
 +}
 +
 +/* Waits for a fence in short kernel waits so the connection lock is never held for long. */
@@ -587,13 +590,13 @@ index 0000000..4a2a59b
 +            kern_return_t kr = IOConnectUnmapMemory64(dw.conn, bo->token, mach_task_self(),
 +                                                     (mach_vm_address_t)(uintptr_t)bo->mapping);
 +            if (kr != KERN_SUCCESS)
-+               return retire->failure = vk_device_set_lost(&dev->vk, "deferred CPU unmap failed: 0x%x", kr);
++               return retire->failure = darwin_lost(dev, "deferred CPU unmap failed: 0x%x", kr);
 +            bo->mapping = NULL;
 +         }
 +         NativeAdrenoAbiBoCpuUnmap undo = {.handle = bo->handle, .token = bo->token};
 +         kern_return_t kr = dw_call(NativeAdrenoMethodBoCpuUnmap, &undo, sizeof(undo), NULL, 0);
 +         if (kr != KERN_SUCCESS)
-+            return retire->failure = vk_device_set_lost(&dev->vk, "deferred CPU lease release failed: 0x%x", kr);
++            return retire->failure = darwin_lost(dev, "deferred CPU lease release failed: 0x%x", kr);
 +         bo->token = 0;
 +      }
 +      NativeAdrenoAbiBoFree release = {.handle = bo->handle};
@@ -601,7 +604,7 @@ index 0000000..4a2a59b
 +      if (kr == kIOReturnBusy)
 +         return VK_SUCCESS;
 +      if (kr != KERN_SUCCESS)
-+         return retire->failure = vk_device_set_lost(&dev->vk, "deferred BoFree failed: 0x%x", kr);
++         return retire->failure = darwin_lost(dev, "deferred BoFree failed: 0x%x", kr);
 +      darwin_free_iova(dev, bo->iova, bo->size);
 +      *bo = {};
 +      retire->head = (retire->head + 1) % DARWIN_RETIRED_BOS;
@@ -635,7 +638,7 @@ index 0000000..4a2a59b
 +    * reusing its IOVA, even though no tu_bo could be published to the caller. */
 +   struct darwin_retire_state *retire = (struct darwin_retire_state *)dev->darwin_retire;
 +   pthread_mutex_lock(&retire->lock);
-+   retire->failure = vk_device_set_lost(&dev->vk, "BoMap cleanup failed: 0x%x; retaining native allocation and IOVA", cleanup);
++   retire->failure = darwin_lost(dev, "BoMap cleanup failed: 0x%x; retaining native allocation and IOVA", cleanup);
 +   VkResult result = retire->failure;
 +   pthread_mutex_unlock(&retire->lock);
 +   return result;
@@ -877,7 +880,7 @@ index 0000000..4a2a59b
 +      VkResult waited = darwin_wait_idle(dev);
 +      pthread_mutex_lock(&retire->lock);
 +      if (waited != VK_SUCCESS)
-+         retire->failure = vk_device_set_lost(&dev->vk, "deferred BO pressure wait failed");
++         retire->failure = darwin_lost(dev, "deferred BO pressure wait failed");
 +      else
 +         darwin_reap_locked(dev, retire);
 +   }
@@ -893,7 +896,7 @@ index 0000000..4a2a59b
 +   } else {
 +      /* No reusable range is reported on error. The kernel still owns the handle
 +       * and view; connection teardown must drain them, even if this record cannot fit. */
-+      retire->failure = vk_device_set_lost(&dev->vk, "deferred BO queue remains full; retaining native allocation");
++      retire->failure = darwin_lost(dev, "deferred BO queue remains full; retaining native allocation");
 +   }
 +   pthread_mutex_unlock(&retire->lock);
 +
@@ -1110,16 +1113,18 @@ index 0000000..4a2a59b
 +static void
 +darwin_note_fence(uint32_t fence)
 +{
-+   if (dw.inflight_count == 8) {
-+      memmove(dw.inflight, dw.inflight + 1, 7 * sizeof(dw.inflight[0]));
-+      dw.inflight_count = 7;
-+   }
-+   dw.inflight[dw.inflight_count++] = fence;
 +   dw.last_fence = fence;
 +}
 +
-+/* One kernel submission of up to NativeAdrenoAbiMaxBuffers indirect buffers; waits for the oldest job when all eight kernel job slots
-+ * are taken. */
++/* One kernel submission of up to NativeAdrenoAbiMaxBuffers indirect buffers.
++ *
++ * The kernel has one ring and eight job slots for all its clients (the render server, WebKit's GPU and web content processes), and it
++ * retires a job's slot once the CP passes its fence. So Busy (no free slot) or NoResources (no ring space) is transient whoever holds
++ * the slots: retry, sleeping a little longer each time, until the submission goes in. Only when it finds none for 5 s (the
++ * fence waits' bound for a hung GPU) is the device lost. This used to give up after 64 tries, waiting on this process's oldest fence,
++ * a list that was never pruned, so the wait returned at once and 64 tries took microseconds: a web page's GPU work filling the slots
++ * lost the render server's device, and Core Animation then crashed on the nil command queue (QuartzCore
++ * AsynchronousDispatcher::renderer()). */
 +static VkResult
 +darwin_submit_chunk(struct tu_queue *queue, const NativeAdrenoAbiSubmitBuffer *entries,
 +                    unsigned count, uint32_t *fence)
@@ -1131,25 +1136,39 @@ index 0000000..4a2a59b
 +   for (unsigned i = 0; i < count; i++)
 +      req.buffers[i] = entries[i];
 +
-+   for (unsigned attempt = 0; attempt < 64; attempt++) {
++   uint64_t began = 0;
++   unsigned sleep_us = 50;
++   for (;;) {
 +      NativeAdrenoAbiSubmitReply reply = {};
 +      kern_return_t kr = dw_call(NativeAdrenoMethodSubmit, &req, sizeof(req), &reply, sizeof(reply));
 +      if (kr == KERN_SUCCESS) {
 +         *fence = (uint32_t)reply.fence;
++         if (began) {
++            const uint64_t waited = os_time_get_nano() - began;
++            pthread_mutex_lock(&dw.lock);
++            const bool first = dw.slot_waits++ == 0, longest = waited > dw.slot_wait_max_ns;
++            if (longest)
++               dw.slot_wait_max_ns = waited;
++            const unsigned long long waits = dw.slot_waits;
++            pthread_mutex_unlock(&dw.lock);
++            if (first || (longest && waited > 20000000ull))
++               mesa_logw("NativeAdreno: submit waited %llu us for a job slot or ring space (%llu waits so far)",
++                         (unsigned long long)(waited / 1000), waits);
++         }
 +         return VK_SUCCESS;
 +      }
-+      if (kr != kIOReturnBusy)
-+         return vk_device_set_lost(&dev->vk, "submit failed: 0x%x", kr);
++      if (kr != kIOReturnBusy && kr != kIOReturnNoResources)
++         return darwin_lost(dev, "submit failed: 0x%x", kr);
 +
-+      pthread_mutex_lock(&dw.lock);
-+      uint32_t oldest = dw.inflight_count ? dw.inflight[0] : 0;
-+      pthread_mutex_unlock(&dw.lock);
-+      if (!oldest)
-+         usleep(100);
-+      else if (dw_wait_fence_locked_free(dev, oldest, os_time_get_nano() + 5000000000ull) != VK_SUCCESS)
-+         return vk_device_set_lost(&dev->vk, "submit: GPU did not retire a job");
++      const uint64_t now = os_time_get_nano();
++      if (!began)
++         began = now;
++      else if (now - began > 5000000000ull)
++         return darwin_lost(dev, "submit: no job slot or ring space for 5 s (0x%x)", kr);
++      usleep(sleep_us);
++      if (sleep_us < 1000)
++         sleep_us *= 2;
 +   }
-+   return vk_device_set_lost(&dev->vk, "submit: no free job slot");
 +}
 +
 +static VkResult
@@ -1166,7 +1185,7 @@ index 0000000..4a2a59b
 +      struct vk_darwin_sync *s = container_of(waits[i].sync, struct vk_darwin_sync, vk);
 +      VkResult result = darwin_sync_wait(dev, s, UINT64_MAX);
 +      if (result != VK_SUCCESS)
-+         return vk_device_set_lost(&dev->vk, "wait before submit failed");
++         return darwin_lost(dev, "wait before submit failed");
 +   }
 +
 +   uint32_t fence = 0;
@@ -1277,10 +1296,10 @@ index 0000000..4a2a59b
 +   if (kr == kIOReturnUnsupported)
 +      return VK_SUCCESS; /* counters not attached in this kernel */
 +   if (kr != KERN_SUCCESS)
-+      return vk_device_set_lost(&device->vk, "error getting GPU status: 0x%x", kr);
++      return darwin_lost(device, "error getting GPU status: 0x%x", kr);
 +   if (reply.faults != device->fault_count) {
 +      device->fault_count = reply.faults;
-+      return vk_device_set_lost(&device->vk, "GPU faulted or hung");
++      return darwin_lost(device, "GPU faulted or hung");
 +   }
 +   return VK_SUCCESS;
 +}
