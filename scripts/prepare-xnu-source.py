@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import time
+import urllib.error
 import urllib.request
 
 # Tags of the Apple sources that still carry the headers newer xnu omits; feeds.toml sets them for the unixnu driver.
@@ -19,7 +21,14 @@ def fetch(url):
     """The GitHub API limits anonymous calls per address, which shared CI runners exhaust; send a token when one is set."""
     token = os.environ.get('GITHUB_TOKEN') or os.environ.get('GH_TOKEN')
     request = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}'} if token and url.startswith('https://api.github.com/') else {})
-    return urllib.request.urlopen(request, timeout=30).read()
+    # Retried with backoff: one reset connection used to fail the whole kernel build (each fresh output fetches the headers anew).
+    for attempt in range(5):
+        try:
+            return urllib.request.urlopen(request, timeout=30).read()
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as error:
+            if attempt == 4 or (isinstance(error, urllib.error.HTTPError) and error.code < 500 and error.code != 429):
+                raise
+            time.sleep(2 ** attempt)
 
 
 def restore(entry, destination=DESTINATION, tag=TAG):
