@@ -20,11 +20,17 @@ parser.add_argument('--component', choices=('systemos', 'os'), default='systemos
 parser.add_argument('--negative-volume-uuid', action='store_true', help='Isolated real-signature policy with the wrong signed volume identity')
 parser.add_argument('--include-systemos', action='store_true', help='Include both separately verified original OS and SystemOS policies under the same explicit anchor')
 parser.add_argument('--duplicate-os-policy', action='store_true', help='Isolated negative bundle with an ambiguous duplicate OS policy')
+parser.add_argument('--extra-policy', action='append', default=[], metavar='COMPONENT',
+                    help='With --include-systemos: also include the separately verified policy build/verified-root-COMPONENT (one more '
+                         'root window, e.g. appos for Cryptex1,AppOS) under the same anchor; its image must be pinned in ORIGINAL_IMAGES')
 args = parser.parse_args()
 if args.include_systemos and (args.component != 'os' or args.negative_volume_uuid):
     parser.error('The two-volume bundle requires the positive original OS policy')
 if args.duplicate_os_policy and not args.include_systemos:
     parser.error('The duplicate control requires the explicit two-volume bundle')
+if args.extra_policy and (not args.include_systemos or args.duplicate_os_policy or
+                          len(set(args.extra_policy)) != len(args.extra_policy) or set(args.extra_policy) & {'os', 'systemos'}):
+    parser.error('Extra policies join the positive two-volume bundle, each once, other than os and systemos')
 if args.negative_volume_uuid and args.component != 'os':
     parser.error('The actual-root negative control requires the original OS policy')
 out = ROOT / (('build/verified-root-os-xnu' if args.component == 'os' else 'build/verified-root-xnu') +
@@ -41,7 +47,9 @@ ORIGINAL_IMAGES = {
     '21H461': dict(os=('e5634d04a8ac35f024845f583394e0a35deb26a04cb0c00286a8674e25a9a4f2', 1483785),
                    systemos=('b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f', 806400)),
     '20H392': dict(os=('6e87bfcaa8eca952e00b719f333d1f1060715a63566112267ad8730e1ed98906', 1375753),
-                   systemos=('9cd738f3b0169055549df84ad6d8d13e50a2da39af618ce0522ca4e06df86849', 669696)),
+                   systemos=('9cd738f3b0169055549df84ad6d8d13e50a2da39af618ce0522ca4e06df86849', 669696),
+                   # Cryptex1,AppOS (087-86715-047.dmg, raw APFS, volume AppCryptex): an optional third root window (--extra-policy appos)
+                   appos=('391f2df322c3172b021b2874f6da5c3e78b70b3df8f502e1a4af2b1d715c4608', 2560)),
 }
 build = next((b for b, images in ORIGINAL_IMAGES.items()
               if (metadata['image_sha256'], metadata['blocks_verified']) == images[args.component]), None)
@@ -123,6 +131,20 @@ _verified_root_systemos_manifest:
 _verified_root_policies:
 .quad _verified_root_manifest, ''' + str(manifest.stat().st_size) + '''
 .quad _verified_root_systemos_manifest, ''' + str(extra.stat().st_size) + '\n'
+    for component in args.extra_policy:
+        more_dir = ROOT / f'build/verified-root-{component}'
+        more_meta = json.loads((more_dir / 'verification.json').read_text())
+        if (component not in ORIGINAL_IMAGES[build] or
+                (more_meta['image_sha256'], more_meta['blocks_verified']) != ORIGINAL_IMAGES[build][component] or
+                not more_meta['real_c_signature_and_block_verification'] or (more_dir / 'trusted-key.bin').read_bytes() != key.read_bytes()):
+            raise SystemExit(f'Require separately fully verified original {component} under the same independent anchor')
+        more = more_dir / 'manifest.bin'
+        policy_records.append(dict(manifest_sha256=hashlib.sha256(more.read_bytes()).hexdigest(),
+                                   image_bytes=struct.unpack_from('<Q', more.read_bytes(), 24)[0]))
+        symbol = f'_verified_root_{component}_manifest'
+        bundle_assembly = bundle_assembly.replace('.balign 8\n.globl _verified_root_policies',
+                                                  f'.balign 8\n.globl {symbol}\n{symbol}:\n.incbin "{more}"\n.balign 8\n.globl _verified_root_policies', 1)
+        bundle_assembly += f'.quad {symbol}, {more.stat().st_size}\n'
     if args.duplicate_os_policy:
         bundle_assembly += '.quad _verified_root_manifest, ' + str(manifest.stat().st_size) + '\n'
         policy_records.append(policy_records[0].copy())
@@ -186,7 +208,7 @@ subprocess.run(['xcrun', 'ar', 'rcs', archive, *objects], check=True)
     original_image_sha256=metadata['image_sha256'], original_block_count=metadata['blocks_verified'],
     actual_sample_indices=indices, actual_sample_lengths=lengths, sample_sha256=hashlib.sha256(samples.read_bytes()).hexdigest(),
     negative_volume_uuid=args.negative_volume_uuid,
-    policy_bundle=args.include_systemos, duplicate_os_policy=args.duplicate_os_policy,
+    policy_bundle=args.include_systemos, duplicate_os_policy=args.duplicate_os_policy, extra_policies=args.extra_policy,
     policy_records=policy_records,
     signed_volume_uuid=str(uuid.UUID(bytes=manifest.read_bytes()[40:56])).upper(),
     original_manifest_sha256=original_manifest_sha256,
