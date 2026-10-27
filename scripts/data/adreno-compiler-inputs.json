@@ -57,7 +57,8 @@
     "patches/mesa/turnip-darwin-linux-host.patch",
     "patches/mesa/ir3-relax-half-round-trip.patch",
     "patches/mesa/turnip-cs-bo-recycle.patch",
-    "patches/mesa/turnip-shader-names.patch"
+    "patches/mesa/turnip-shader-names.patch",
+    "patches/mesa/turnip-upstream-push-const-picks.patch"
   ],
   "integer_fma_reference": {
     "repository": "https://github.com/ucb-bar/berkeley-softfloat-3",
