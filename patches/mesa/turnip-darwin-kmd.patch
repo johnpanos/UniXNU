@@ -271,7 +271,7 @@ new file mode 100644
 index 0000000..e52eee3
 --- /dev/null
 +++ b/src/freedreno/vulkan/tu_knl_darwin.cc
-@@ -0,0 +1,1156 @@
+@@ -0,0 +1,1158 @@
 +/*
 + * Native Darwin kernel backend for Turnip: talks to the NativeAdreno IOKit user client (NativeAdrenoABI.h, version 1).
 + * Modelled on tu_knl_kgsl.cc (no libdrm) and tu_knl_drm_msm.cc (the client chooses GPU addresses).
@@ -480,9 +480,11 @@ index 0000000..e52eee3
 +{
 +   for (;;) {
 +      uint64_t now = os_time_get_nano();
-+      uint64_t slice = 1000000; /* 1 ms */
-+      if (abs_timeout_ns != UINT64_MAX && abs_timeout_ns <= now)
-+         slice = 0;
++      /* The rest of the wait, at most 100 ms a call (upstream cd1b975): one 1 ms slice a call made a frame's wait several
++       * IOKit calls (upstream i553: 258682 waits in 166 s, 97 % timed out). */
++      uint64_t slice = 100000000; /* 100 ms */
++      if (abs_timeout_ns != UINT64_MAX)
++         slice = abs_timeout_ns > now ? MIN2(abs_timeout_ns - now, slice) : 0;
 +      NativeAdrenoAbiWaitFence req = {.fence = fence, .timeout_ns = slice};
 +      kern_return_t kr = dw_call(NativeAdrenoMethodWaitFence, &req, sizeof(req), NULL, 0);
 +      if (kr == KERN_SUCCESS)
